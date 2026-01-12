@@ -45,7 +45,14 @@ class VerifyCodeSerializer(serializers.Serializer):
             })
 
         # Проверяем код
-        if not settings.DEBUG:
+        if settings.DEBUG:
+           if code != '1234':
+                user.increment_code_attempts()
+                attempts_left = 5 - user.code_attempts
+                raise serializers.ValidationError({
+                    "code": f"Неверный код. Осталось попыток: {attempts_left}"
+                })
+        else:
             if user.confirmation_code != code:
                 user.increment_code_attempts()
                 attempts_left = 5 - user.code_attempts
