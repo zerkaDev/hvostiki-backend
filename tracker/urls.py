@@ -1,10 +1,16 @@
-from django.urls import path
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+
 from .views import (
     SendCodeView,
     VerifyCodeView,
     ProfileView,
     LogoutView,
+    PetViewSet,
 )
+
+router = DefaultRouter()
+router.register(r'pets', PetViewSet, basename='pet')
 
 urlpatterns = [
     # Авторизация/регистрация
@@ -14,4 +20,6 @@ urlpatterns = [
 
     # Профиль
     path('profile/', ProfileView.as_view(), name='profile'),
+
+    path('', include(router.urls)),
 ]

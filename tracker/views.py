@@ -1,7 +1,8 @@
 from django.conf import settings
 from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample
-from rest_framework import status, permissions
+from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample, extend_schema_view, OpenApiParameter
+from rest_framework import status, permissions, viewsets
+from rest_framework.decorators import action
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.utils import timezone
@@ -11,11 +12,11 @@ import logging
 
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from tracker.models import User
+from tracker.models import User, Pet
 from tracker.serializers import (
     PhoneNumberSerializer,
     VerifyCodeSerializer,
-    UserSerializer,
+    UserSerializer, PetSerializer, PetCreateSerializer,
 )
 from tracker.tasks import send_confirmation_code
 
@@ -267,3 +268,152 @@ class LogoutView(APIView):
             "message": "Выход выполнен успешно"
         })
 
+@extend_schema_view(
+    list=extend_schema(
+        summary='Получить список питомцев',
+        description='Возвращает список всех питомцев текущего пользователя',
+        tags=['pets'],
+        responses={
+            200: PetSerializer(many=True),
+            401: OpenApiTypes.OBJECT,
+        }
+    ),
+    create=extend_schema(
+        summary='Создать нового питомца',
+        description='Создание нового питомца с привязкой к текущему пользователю',
+        tags=['pets'],
+        request=PetCreateSerializer,
+        responses={
+            201: PetSerializer,
+            400: OpenApiTypes.OBJECT,
+            401: OpenApiTypes.OBJECT,
+        },
+        examples=[
+            OpenApiExample(
+                'Успешное создание',
+                value={
+                    "success": True,
+                    "message": "Питомец успешно создан",
+                    "data": {
+                        "id": 1,
+                        "owner": "username",
+                        "owner_id": 1,
+                        "name": "Барсик",
+                        "pet_type": "cat",
+                        "pet_type_display": "Кошка",
+                        "breed": "Сиамская",
+                        "weight": "4.50",
+                        "age": 3,
+                        "color": "white",
+                        "color_display": "Белый",
+                        "image": None,
+                        "image_url": None,
+                        "created_at": "2024-01-15T10:30:00Z",
+                        "updated_at": "2024-01-15T10:30:00Z"
+                    }
+                },
+                response_only=True,
+                status_codes=['201'],
+            ),
+        ]
+    ),
+    retrieve=extend_schema(
+        summary='Получить информацию о питомце',
+        description='Получение детальной информации о конкретном питомце',
+        tags=['pets'],
+        parameters=[
+            OpenApiParameter(
+                name='id',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.PATH,
+                description='ID питомца'
+            ),
+        ],
+        responses={
+            200: PetSerializer,
+            404: OpenApiTypes.OBJECT,
+        }
+    ),
+    update=extend_schema(
+        summary='Обновить информацию о питомце',
+        description='Полное обновление информации о питомце',
+        tags=['pets'],
+        request=PetCreateSerializer,
+        responses={
+            200: PetSerializer,
+            400: OpenApiTypes.OBJECT,
+            404: OpenApiTypes.OBJECT,
+        }
+    ),
+    partial_update=extend_schema(
+        summary='Частично обновить информацию о питомце',
+        description='Частичное обновление информации о питомце',
+        tags=['pets'],
+        request=PetCreateSerializer,
+        responses={
+            200: PetSerializer,
+            400: OpenApiTypes.OBJECT,
+            404: OpenApiTypes.OBJECT,
+        }
+    ),
+    destroy=extend_schema(
+        summary='Удалить питомца',
+        description='Удаление питомца по ID',
+        tags=['pets'],
+        responses={
+            204: None,
+            404: OpenApiTypes.OBJECT,
+        }
+    ),
+)
+class PetViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet для управления питомцами.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        """Пользователь видит только своих питомцев"""
+        return Pet.objects.filter(owner=self.request.user)
+
+    def get_serializer_class(self):
+        """Выбираем сериализатор в зависимости от действия"""
+        if self.action in ['create', 'update', 'partial_update']:
+            return PetCreateSerializer
+        return PetSerializer
+
+    def perform_create(self, serializer):
+        """Автоматически устанавливаем владельца при создании"""
+        serializer.save(owner=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        """Кастомный обработчик создания"""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+
+        # Возвращаем полные данные созданного питомца
+        pet = serializer.instance
+        full_serializer = PetSerializer(
+            pet,
+            context={'request': request}
+        )
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Питомец успешно создан',
+                'data': full_serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=False, methods=['get'])
+    def my_pets(self, request):
+        """Получение питомцев текущего пользователя (альтернатива)"""
+        pets = self.get_queryset()
+        serializer = self.get_serializer(pets, many=True)
+        return Response({
+            'count': len(serializer.data),
+            'results': serializer.data
+        })

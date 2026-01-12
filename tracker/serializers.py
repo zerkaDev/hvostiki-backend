@@ -1,7 +1,7 @@
 from django.conf import settings
 from rest_framework import serializers
 from django.utils import timezone
-from .models import User
+from .models import User, Pet
 
 from .utils import normalize_phone
 
@@ -83,3 +83,74 @@ class UserSerializer(serializers.ModelSerializer):
             'created_at',
         ]
         read_only_fields = ['id', 'phone_number', 'is_verified', 'created_at']
+
+
+class PetSerializer(serializers.ModelSerializer):
+    owner = serializers.ReadOnlyField(source='owner.username')
+    owner_id = serializers.ReadOnlyField(source='owner.id')
+    pet_type_display = serializers.CharField(source='get_pet_type_display', read_only=True)
+    color_display = serializers.CharField(source='get_color_display', read_only=True)
+    image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Pet
+        fields = [
+            'id',
+            'owner',
+            'owner_id',
+            'name',
+            'pet_type',
+            'pet_type_display',
+            'breed',
+            'weight',
+            'age',
+            'color',
+            'color_display',
+            'image',
+            'image_url',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+    def get_image_url(self, obj):
+        if obj.image:
+            return self.context['request'].build_absolute_uri(obj.image.url)
+        return None
+
+    def validate_weight(self, value):
+        """Проверка веса"""
+        if value <= 0:
+            raise serializers.ValidationError("Вес должен быть положительным числом")
+        if value > 200:  # Максимальный вес 200 кг (для больших собак)
+            raise serializers.ValidationError("Вес не может превышать 200 кг")
+        return value
+
+    def validate_age(self, value):
+        """Проверка возраста"""
+        if value > 50:  # Максимальный возраст 50 лет
+            raise serializers.ValidationError("Возраст не может превышать 50 лет")
+        return value
+
+
+class PetCreateSerializer(serializers.ModelSerializer):
+    """Сериализатор для создания питомца (без read_only полей)"""
+
+    class Meta:
+        model = Pet
+        fields = [
+            'name',
+            'pet_type',
+            'breed',
+            'weight',
+            'age',
+            'color',
+            'image'
+        ]
+
+    def create(self, validated_data):
+        """Автоматически устанавливаем владельца из request.user"""
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            validated_data['owner'] = request.user
+        return super().create(validated_data)

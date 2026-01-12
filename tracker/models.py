@@ -1,6 +1,6 @@
 import datetime
 
-from django.core.validators import RegexValidator
+from django.core.validators import RegexValidator, MinValueValidator
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.utils import timezone
@@ -107,3 +107,94 @@ class User(AbstractBaseUser, PermissionsMixin):
         """Сбрасывает счетчик попыток"""
         self.code_attempts = 0
         self.save(update_fields=['code_attempts'])
+
+
+class Pet(models.Model):
+    """Модель для питомца"""
+
+    class PetType(models.TextChoices):
+        CAT = 'cat', 'Кошка'
+        DOG = 'dog', 'Собака'
+
+    class Color(models.TextChoices):
+        # Базовые цвета, можно расширить
+        BLACK = 'black', 'Чёрный'
+        WHITE = 'white', 'Белый'
+        BROWN = 'brown', 'Коричневый'
+        GRAY = 'gray', 'Серый'
+        GINGER = 'ginger', 'Рыжий'
+        CREAM = 'cream', 'Кремовый'
+        MULTICOLORED = 'multicolored', 'Разноцветный'
+
+    # Основные поля
+    owner = models.ForeignKey(User, related_name='pets', on_delete=models.CASCADE, verbose_name='Хозяин')
+
+    name = models.CharField(
+        max_length=100,
+        verbose_name='Кличка',
+        help_text='Введите кличку питомца'
+    )
+
+    pet_type = models.CharField(
+        max_length=10,
+        choices=PetType.choices,
+        verbose_name='Вид животного'
+    )
+
+    breed = models.CharField(
+        max_length=100,
+        verbose_name='Порода',
+        help_text='Например: сиамская, дворняга и т.д.'
+    )
+
+    weight = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        validators=[MinValueValidator(0.01)],
+        verbose_name='Вес (кг)',
+        help_text='Вес в килограммах'
+    )
+
+    age = models.PositiveIntegerField(
+        verbose_name='Возраст',
+        help_text='Возраст в полных годах'
+    )
+
+    color = models.CharField(
+        max_length=50,
+        choices=Color.choices,
+        verbose_name='Окрас'
+    )
+
+    image = models.ImageField(
+        upload_to='pets/%Y/%m/%d/',
+        verbose_name='Фотография',
+        blank=True,
+        null=True,
+        help_text='Загрузите фото питомца'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Методы и свойства
+    @property
+    def age_with_label(self):
+        """Возвращает возраст с правильным окончанием"""
+        if 10 <= self.age % 100 <= 20:
+            years_label = 'лет'
+        elif self.age % 10 == 1:
+            years_label = 'год'
+        elif 2 <= self.age % 10 <= 4:
+            years_label = 'года'
+        else:
+            years_label = 'лет'
+        return f'{self.age} {years_label}'
+
+    def __str__(self):
+        return f'{self.get_pet_type_display()} {self.name}'
+
+    class Meta:
+        verbose_name = 'Питомец'
+        verbose_name_plural = 'Питомцы'
+        ordering = ['-created_at']
