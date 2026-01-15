@@ -10,13 +10,15 @@ from django.core.cache import cache
 import random
 import logging
 
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from tracker.models import User, Pet
 from tracker.serializers import (
     PhoneNumberSerializer,
     VerifyCodeSerializer,
-    UserSerializer, PetSerializer, PetCreateSerializer,
+    UserSerializer, PetSerializer, PetCreateSerializer, ErrorResponseSerializer, TokenResponseSerializer,
+    RefreshTokenSerializer,
 )
 from tracker.tasks import send_confirmation_code
 
@@ -39,6 +41,7 @@ class SendCodeView(APIView):
     permission_classes = [permissions.AllowAny]
 
     @extend_schema(
+        tags=["Аутентификация"],
         summary="Отправка кода подтверждения",
         description="""
             Отправляет SMS с кодом подтверждения на указанный номер телефона.
@@ -57,7 +60,7 @@ class SendCodeView(APIView):
                     OpenApiExample(
                         "Успешная отправка",
                         value={
-                            "message": "Код подтверждения отправлен",
+                            "detail": "Код подтверждения отправлен",
                             "phone_number": "+79991234567",
                             "resend_timeout": 60
                         }
@@ -137,7 +140,7 @@ class SendCodeView(APIView):
         cache.set(cache_key, True, timeout=60)
 
         return Response({
-            "message": "Код подтверждения отправлен",
+            "detail": "Код подтверждения отправлен",
             "phone_number": phone_number,
             "resend_timeout": 60
         }, status=status.HTTP_200_OK)
@@ -159,6 +162,7 @@ class VerifyCodeView(APIView):
     permission_classes = [permissions.AllowAny]
 
     @extend_schema(
+        tags=["Аутентификация"],
         summary="Подтверждение кода",
         description="""
         Проверяет код подтверждения и возвращает JWT токены для аутентификации.
@@ -256,6 +260,9 @@ class ProfileView(APIView):
         return Response(serializer.data)
 
 
+@extend_schema(
+    tags=["Аутентификация"],
+)
 class LogoutView(APIView):
     """Выход из системы"""
     permission_classes = [permissions.IsAuthenticated]
@@ -265,7 +272,7 @@ class LogoutView(APIView):
         RefreshToken.for_user(request.user).blacklist()
 
         return Response({
-            "message": "Выход выполнен успешно"
+            "detail": "Выход выполнен успешно"
         })
 
 @extend_schema_view(
@@ -292,25 +299,21 @@ class LogoutView(APIView):
             OpenApiExample(
                 'Успешное создание',
                 value={
-                    "success": True,
-                    "message": "Питомец успешно создан",
-                    "data": {
-                        "id": 1,
-                        "owner": "username",
-                        "owner_id": 1,
-                        "name": "Барсик",
-                        "pet_type": "cat",
-                        "pet_type_display": "Кошка",
-                        "breed": "Сиамская",
-                        "weight": "4.50",
-                        "age": 3,
-                        "color": "white",
-                        "color_display": "Белый",
-                        "image": None,
-                        "image_url": None,
-                        "created_at": "2024-01-15T10:30:00Z",
-                        "updated_at": "2024-01-15T10:30:00Z"
-                    }
+                    "id": 1,
+                    "owner": "username",
+                    "owner_id": 1,
+                    "name": "Барсик",
+                    "pet_type": "cat",
+                    "pet_type_display": "Кошка",
+                    "breed": "Сиамская",
+                    "weight": "4.50",
+                    "age": 3,
+                    "color": "white",
+                    "color_display": "Белый",
+                    "image": None,
+                    "image_url": None,
+                    "created_at": "2024-01-15T10:30:00Z",
+                    "updated_at": "2024-01-15T10:30:00Z"
                 },
                 response_only=True,
                 status_codes=['201'],
@@ -400,11 +403,7 @@ class PetViewSet(viewsets.ModelViewSet):
         )
 
         return Response(
-            {
-                'success': True,
-                'message': 'Питомец успешно создан',
-                'data': full_serializer.data
-            },
+            full_serializer.data,
             status=status.HTTP_201_CREATED
         )
 
@@ -417,3 +416,112 @@ class PetViewSet(viewsets.ModelViewSet):
             'count': len(serializer.data),
             'results': serializer.data
         })
+
+
+@extend_schema(
+    tags=["Аутентификация"],
+    summary="Обновление токенов доступа",
+    description="""
+    Обновление access token с помощью refresh token.
+
+    **Важно:**
+    - Refresh token действителен 7 дней
+    - Access token действителен 60 минут
+    - При каждом обновлении выдается новый refresh token (ротация токенов)
+    - Старый refresh token становится недействительным
+    """,
+    request=RefreshTokenSerializer,
+    responses={
+        200: OpenApiResponse(
+            response=TokenResponseSerializer,
+            description="Токены успешно обновлены",
+            examples=[
+                OpenApiExample(
+                    "Успешное обновление токенов",
+                    value={
+                        "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+                        "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+                        "access_expires": 1700000000,
+                        "refresh_expires": 1700604800
+                    }
+                )
+            ]
+        ),
+        400: OpenApiResponse(
+            response=ErrorResponseSerializer,
+            description="Отсутствует refresh token",
+            examples=[
+                OpenApiExample(
+                    "Отсутствует refresh token",
+                    value={
+                        "detail": "Refresh token is required"
+                    }
+                )
+            ]
+        ),
+        401: OpenApiResponse(
+            response=ErrorResponseSerializer,
+            description="Неверный или просроченный refresh token",
+            examples=[
+                OpenApiExample(
+                    "Неверный токен",
+                    value={
+                        "detail": "Token is invalid or expired"
+                    }
+                ),
+                OpenApiExample(
+                    "Просроченный токен",
+                    value={
+                        "detail": "Token has expired"
+                    }
+                )
+            ]
+        )
+    },
+    examples=[
+        OpenApiExample(
+            "Запрос на обновление токена",
+            value={"refresh": "your_refresh_token_here"},
+            request_only=True
+        )
+    ]
+)
+class RefreshTokenView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        refresh_token = request.data.get('refresh')
+
+        if not refresh_token:
+            return Response(
+                {"detail": "Refresh token is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            refresh = RefreshToken(refresh_token)
+
+            # Создаем новые токены
+            new_refresh = RefreshToken.for_user(refresh.user)
+            new_access_token = new_refresh.access_token
+
+            # Добавляем старый токен в blacklist (если настроен)
+            # refresh.blacklist()
+
+            return Response({
+                "refresh": str(new_refresh),
+                "access": str(new_access_token),
+                "access_expires": new_access_token.payload['exp'],
+                "refresh_expires": new_refresh.payload['exp']
+            })
+
+        except TokenError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        except Exception:
+            return Response(
+                {"detail": "Invalid token"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )

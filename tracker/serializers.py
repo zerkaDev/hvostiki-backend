@@ -154,3 +154,19 @@ class PetCreateSerializer(serializers.ModelSerializer):
         if request and hasattr(request, 'user'):
             validated_data['owner'] = request.user
         return super().create(validated_data)
+
+
+class TokenResponseSerializer(serializers.Serializer):
+    refresh = serializers.CharField(help_text="Refresh token для получения нового access token")
+    access = serializers.CharField(help_text="Access token для аутентификации запросов")
+    access_expires = serializers.IntegerField(help_text="Время истечения access token (Unix timestamp)")
+    refresh_expires = serializers.IntegerField(help_text="Время истечения refresh token (Unix timestamp)")
+
+
+class ErrorResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField(help_text="Описание ошибки")
+    code = serializers.CharField(required=False, help_text="Код ошибки")
+
+
+class RefreshTokenSerializer(serializers.Serializer):
+    refresh = serializers.CharField(help_text="Refresh token obtained during authentication")

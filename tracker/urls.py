@@ -6,7 +6,7 @@ from .views import (
     VerifyCodeView,
     ProfileView,
     LogoutView,
-    PetViewSet,
+    PetViewSet, RefreshTokenView,
 )
 
 router = DefaultRouter()
@@ -16,6 +16,8 @@ urlpatterns = [
     # Авторизация/регистрация
     path('auth/send-code/', SendCodeView.as_view(), name='send_code'),
     path('auth/verify-code/', VerifyCodeView.as_view(), name='verify_code'),
+
+    path('auth/token/refresh/', RefreshTokenView.as_view(), name='token-refresh'),
     path('auth/logout/', LogoutView.as_view(), name='logout'),
 
     # Профиль
