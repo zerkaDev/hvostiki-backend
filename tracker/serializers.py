@@ -88,9 +88,6 @@ class UserSerializer(serializers.ModelSerializer):
 class PetSerializer(serializers.ModelSerializer):
     owner = serializers.ReadOnlyField(source='owner.username')
     owner_id = serializers.ReadOnlyField(source='owner.id')
-    pet_type_display = serializers.CharField(source='get_pet_type_display', read_only=True)
-    color_display = serializers.CharField(source='get_color_display', read_only=True)
-    image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Pet
@@ -100,23 +97,15 @@ class PetSerializer(serializers.ModelSerializer):
             'owner_id',
             'name',
             'pet_type',
-            'pet_type_display',
             'breed',
             'weight',
-            'age',
+            'birthday',
             'color',
-            'color_display',
             'image',
-            'image_url',
             'created_at',
             'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
-
-    def get_image_url(self, obj):
-        if obj.image:
-            return self.context['request'].build_absolute_uri(obj.image.url)
-        return None
 
     def validate_weight(self, value):
         """Проверка веса"""

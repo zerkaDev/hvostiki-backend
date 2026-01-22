@@ -307,7 +307,7 @@ class LogoutView(APIView):
                     "pet_type_display": "Кошка",
                     "breed": "Сиамская",
                     "weight": "4.50",
-                    "age": 3,
+                    "birthday": '2024-01-15',
                     "color": "white",
                     "color_display": "Белый",
                     "image": None,

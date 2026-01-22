@@ -155,10 +155,7 @@ class Pet(models.Model):
         help_text='Вес в килограммах'
     )
 
-    age = models.PositiveIntegerField(
-        verbose_name='Возраст',
-        help_text='Возраст в полных годах'
-    )
+    birthday = models.DateField(blank=True, null=True)
 
     color = models.CharField(
         max_length=50,
