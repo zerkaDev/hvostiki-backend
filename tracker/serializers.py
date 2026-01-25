@@ -115,12 +115,6 @@ class PetSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Вес не может превышать 200 кг")
         return value
 
-    def validate_age(self, value):
-        """Проверка возраста"""
-        if value > 50:  # Максимальный возраст 50 лет
-            raise serializers.ValidationError("Возраст не может превышать 50 лет")
-        return value
-
 
 class PetCreateSerializer(serializers.ModelSerializer):
     """Сериализатор для создания питомца (без read_only полей)"""
@@ -132,7 +126,6 @@ class PetCreateSerializer(serializers.ModelSerializer):
             'pet_type',
             'breed',
             'weight',
-            'age',
             'color',
             'image'
         ]
