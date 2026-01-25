@@ -199,3 +199,6 @@ AUTHENTICATION_BACKENDS = [
 UCALLER_API_URL = 'https://api.ucaller.ru/v1.0/'
 UCALLER_SERVICE_ID=os.getenv('UCALLER_SERVICE_ID')
 UCALLER_API_KEY=os.getenv('UCALLER_API_KEY')
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
