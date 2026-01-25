@@ -116,16 +116,6 @@ class Pet(models.Model):
         CAT = 'cat', 'Кошка'
         DOG = 'dog', 'Собака'
 
-    class Color(models.TextChoices):
-        # Базовые цвета, можно расширить
-        BLACK = 'black', 'Чёрный'
-        WHITE = 'white', 'Белый'
-        BROWN = 'brown', 'Коричневый'
-        GRAY = 'gray', 'Серый'
-        GINGER = 'ginger', 'Рыжий'
-        CREAM = 'cream', 'Кремовый'
-        MULTICOLORED = 'multicolored', 'Разноцветный'
-
     # Основные поля
     owner = models.ForeignKey(User, related_name='pets', on_delete=models.CASCADE, verbose_name='Хозяин')
 
@@ -159,7 +149,6 @@ class Pet(models.Model):
 
     color = models.CharField(
         max_length=50,
-        choices=Color.choices,
         verbose_name='Окрас'
     )
 

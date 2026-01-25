@@ -308,8 +308,8 @@ class LogoutView(APIView):
                     "breed": "Сиамская",
                     "weight": "4.50",
                     "birthday": '2024-01-15',
-                    "color": "white",
-                    "color_display": "Белый",
+                    "color":
+                        """Наварил деревенского самогона Наварил деревенского самогона Наварил деревенского самогона (Э-э-у-у) Браги два бидона""",
                     "image": None,
                     "image_url": None,
                     "created_at": "2024-01-15T10:30:00Z",
