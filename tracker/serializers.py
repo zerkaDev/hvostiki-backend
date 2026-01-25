@@ -86,14 +86,12 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class PetSerializer(serializers.ModelSerializer):
-    owner = serializers.ReadOnlyField(source='owner.username')
     owner_id = serializers.ReadOnlyField(source='owner.id')
 
     class Meta:
         model = Pet
         fields = [
             'id',
-            'owner',
             'owner_id',
             'name',
             'pet_type',
