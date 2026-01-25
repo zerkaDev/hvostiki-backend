@@ -125,7 +125,8 @@ class PetCreateSerializer(serializers.ModelSerializer):
             'breed',
             'weight',
             'color',
-            'image'
+            'image',
+            'birthday',
         ]
 
     def create(self, validated_data):
