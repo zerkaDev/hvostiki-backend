@@ -127,14 +127,9 @@ class PetCreateSerializer(serializers.ModelSerializer):
             'color',
             'image',
             'birthday',
+            'gender',
+            'has_castration'
         ]
-
-    def create(self, validated_data):
-        """Автоматически устанавливаем владельца из request.user"""
-        request = self.context.get('request')
-        if request and hasattr(request, 'user'):
-            validated_data['owner'] = request.user
-        return super().create(validated_data)
 
 
 class TokenResponseSerializer(serializers.Serializer):

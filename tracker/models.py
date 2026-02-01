@@ -109,6 +109,11 @@ class User(AbstractBaseUser, PermissionsMixin):
         self.save(update_fields=['code_attempts'])
 
 
+class GenderChoices(models.TextChoices):
+    MALE = ('M', 'Male')
+    FEMALE = ('F', 'Female')
+
+
 class Pet(models.Model):
     """Модель для питомца"""
 
@@ -151,6 +156,9 @@ class Pet(models.Model):
         max_length=50,
         verbose_name='Окрас'
     )
+
+    gender = models.CharField(choices=GenderChoices.choices, max_length=1, null=True, blank=True)
+    has_castration = models.BooleanField(default=False)
 
     image = models.ImageField(
         upload_to='pets/%Y/%m/%d/',
