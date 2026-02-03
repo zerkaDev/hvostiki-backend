@@ -1,6 +1,6 @@
 import datetime
 
-from django.core.validators import RegexValidator, MinValueValidator
+from django.core.validators import RegexValidator, MinValueValidator, FileExtensionValidator
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.utils import timezone
@@ -165,7 +165,10 @@ class Pet(models.Model):
         verbose_name='Фотография',
         blank=True,
         null=True,
-        help_text='Загрузите фото питомца'
+        help_text='Загрузите фото питомца',
+        validators=[FileExtensionValidator(
+            allowed_extensions=['jpg', 'jpeg', 'png', 'heic', 'heif']
+        )]
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

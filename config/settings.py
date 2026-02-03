@@ -202,3 +202,7 @@ UCALLER_API_KEY=os.getenv('UCALLER_API_KEY')
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+from pillow_heif import register_heif_opener
+register_heif_opener()
+
