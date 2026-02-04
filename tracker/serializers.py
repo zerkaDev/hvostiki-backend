@@ -98,6 +98,7 @@ class PetSerializer(serializers.ModelSerializer):
             'breed',
             'weight',
             'birthday',
+            'gender',
             'color',
             'image',
             'created_at',
