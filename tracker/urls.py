@@ -6,7 +6,7 @@ from .views import (
     VerifyCodeView,
     ProfileView,
     LogoutView,
-    PetViewSet, RefreshTokenView, CatBreedsView, DogBreedsView,
+    PetViewSet, RefreshTokenView, BreedListAPIView,
 )
 
 router = DefaultRouter()
@@ -23,7 +23,5 @@ urlpatterns = [
     # Профиль
     path('profile/', ProfileView.as_view(), name='profile'),
 
-    path('', include(router.urls)),
-    path('breeds/cat/', CatBreedsView.as_view(), name='catbreeds'),
-    path('breeds/dog/', DogBreedsView.as_view(), name='dogbreeds'),
+    path('', include(router.urls)),path('breeds/', BreedListAPIView.as_view(), name='breed-list'),
 ]

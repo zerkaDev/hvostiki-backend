@@ -114,14 +114,14 @@ class GenderChoices(models.TextChoices):
     FEMALE = ('F', 'Female')
 
 
+class PetType(models.TextChoices):
+    CAT = 'cat', 'Кошка'
+    DOG = 'dog', 'Собака'
+
+
 class Pet(models.Model):
     """Модель для питомца"""
 
-    class PetType(models.TextChoices):
-        CAT = 'cat', 'Кошка'
-        DOG = 'dog', 'Собака'
-
-    # Основные поля
     owner = models.ForeignKey(User, related_name='pets', on_delete=models.CASCADE, verbose_name='Хозяин')
 
     name = models.CharField(
@@ -174,7 +174,6 @@ class Pet(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    # Методы и свойства
     @property
     def age_with_label(self):
         """Возвращает возраст с правильным окончанием"""
@@ -195,3 +194,19 @@ class Pet(models.Model):
         verbose_name = 'Питомец'
         verbose_name_plural = 'Питомцы'
         ordering = ['-created_at']
+
+
+class Breed(models.Model):
+    name = models.CharField(max_length=200, verbose_name='Название')
+    type = models.CharField(
+        max_length=10,
+        choices=PetType.choices,
+        verbose_name='Вид животного'
+    )
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        verbose_name = 'Порода'
+        verbose_name_plural = 'Породы'

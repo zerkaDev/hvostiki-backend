@@ -1,7 +1,7 @@
 from django.conf import settings
 from rest_framework import serializers
 from django.utils import timezone
-from .models import User, Pet
+from .models import User, Pet, Breed
 
 from .utils import normalize_phone
 
@@ -147,3 +147,9 @@ class ErrorResponseSerializer(serializers.Serializer):
 
 class RefreshTokenSerializer(serializers.Serializer):
     refresh = serializers.CharField(help_text="Refresh token obtained during authentication")
+
+
+class BreedSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Breed
+        fields = ("id", "name", "type")
