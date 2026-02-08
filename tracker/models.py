@@ -119,6 +119,22 @@ class PetType(models.TextChoices):
     DOG = 'dog', 'Собака'
 
 
+class Breed(models.Model):
+    name = models.CharField(max_length=200, verbose_name='Название')
+    type = models.CharField(
+        max_length=10,
+        choices=PetType.choices,
+        verbose_name='Вид животного'
+    )
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        verbose_name = 'Порода'
+        verbose_name_plural = 'Породы'
+
+
 class Pet(models.Model):
     """Модель для питомца"""
 
@@ -136,11 +152,7 @@ class Pet(models.Model):
         verbose_name='Вид животного'
     )
 
-    breed = models.CharField(
-        max_length=100,
-        verbose_name='Порода',
-        help_text='Например: сиамская, дворняга и т.д.'
-    )
+    breed = models.ForeignKey(Breed, related_name='pets', on_delete=models.CASCADE)
 
     weight = models.DecimalField(
         max_digits=5,
@@ -195,18 +207,3 @@ class Pet(models.Model):
         verbose_name_plural = 'Питомцы'
         ordering = ['-created_at']
 
-
-class Breed(models.Model):
-    name = models.CharField(max_length=200, verbose_name='Название')
-    type = models.CharField(
-        max_length=10,
-        choices=PetType.choices,
-        verbose_name='Вид животного'
-    )
-
-    def __str__(self):
-        return self.name
-
-    class Meta:
-        verbose_name = 'Порода'
-        verbose_name_plural = 'Породы'
