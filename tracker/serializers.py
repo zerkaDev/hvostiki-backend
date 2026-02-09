@@ -85,8 +85,15 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'phone_number', 'is_verified', 'created_at']
 
 
+class BreedSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Breed
+        fields = ("id", "name", "type")
+
+
 class PetSerializer(serializers.ModelSerializer):
     owner_id = serializers.ReadOnlyField(source='owner.id')
+    breed_obj = BreedSerializer(read_only=True)
 
     class Meta:
         model = Pet
@@ -95,7 +102,7 @@ class PetSerializer(serializers.ModelSerializer):
             'owner_id',
             'name',
             'pet_type',
-            'breed',
+            'breed_obj',
             'weight',
             'birthday',
             'gender',
@@ -147,9 +154,3 @@ class ErrorResponseSerializer(serializers.Serializer):
 
 class RefreshTokenSerializer(serializers.Serializer):
     refresh = serializers.CharField(help_text="Refresh token obtained during authentication")
-
-
-class BreedSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Breed
-        fields = ("id", "name", "type")
