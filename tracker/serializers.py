@@ -93,7 +93,7 @@ class BreedSerializer(serializers.ModelSerializer):
 
 class PetSerializer(serializers.ModelSerializer):
     owner_id = serializers.ReadOnlyField(source='owner.id')
-    breed_obj = BreedSerializer(read_only=True)
+    breed_obj = BreedSerializer(read_only=True, source='breed')
 
     class Meta:
         model = Pet
