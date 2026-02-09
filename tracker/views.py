@@ -377,7 +377,7 @@ class PetViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """Пользователь видит только своих питомцев"""
-        return Pet.objects.filter(owner=self.request.user)
+        return Pet.objects.filter(owner=self.request.user).select_related('breed')
 
     def get_serializer_class(self):
         """Выбираем сериализатор в зависимости от действия"""
