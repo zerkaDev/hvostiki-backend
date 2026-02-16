@@ -1,7 +1,8 @@
 from django.conf import settings
+from drf_spectacular.utils import extend_schema_serializer
 from rest_framework import serializers
 from django.utils import timezone
-from .models import User, Pet, Breed
+from tracker.models import User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency
 
 from .utils import normalize_phone
 
@@ -155,3 +156,104 @@ class ErrorResponseSerializer(serializers.Serializer):
 
 class RefreshTokenSerializer(serializers.Serializer):
     refresh = serializers.CharField(help_text="Refresh token obtained during authentication")
+
+
+class RecurrenceRuleSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = RecurrenceRule
+        fields = (
+            "frequency",
+            "interval",
+            "week_days",
+            "month_days",
+            "end_date",
+        )
+
+    def validate(self, data):
+        frequency = data.get("frequency")
+
+        if frequency == RecurrenceFrequency.WEEKLY and not data.get("week_days"):
+            raise serializers.ValidationError("week_days required for weekly recurrence")
+
+        if frequency == RecurrenceFrequency.MONTHLY and not data.get("month_days"):
+            raise serializers.ValidationError("month_days required for monthly recurrence")
+
+        return data
+
+
+class EventSerializer(serializers.ModelSerializer):
+    recurrence = RecurrenceRuleSerializer(required=False, allow_null=True)
+
+    class Meta:
+        model = Event
+        fields = (
+            "id",
+            "pet",
+            "title",
+            "description",
+            "start_date",
+            "time",
+            "timezone",
+            "is_recurring",
+            "recurrence",
+        )
+        read_only_fields = ("id",)
+
+    def validate(self, data):
+        is_recurring = data.get("is_recurring")
+        recurrence = data.get("recurrence")
+
+        if is_recurring and not recurrence:
+            raise serializers.ValidationError("Recurring event must include recurrence")
+
+        if not is_recurring and recurrence:
+            raise serializers.ValidationError("Non-recurring event must not include recurrence")
+
+        return data
+
+    def create(self, validated_data):
+        recurrence_data = validated_data.pop("recurrence", None)
+
+        if validated_data.get("is_recurring"):
+            recurrence = RecurrenceRule.objects.create(**recurrence_data)
+            validated_data["recurrence"] = recurrence
+
+        validated_data["user"] = self.context["request"].user
+        return Event.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        recurrence_data = validated_data.pop("recurrence", None)
+
+        # обновляем простые поля
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        instance.save()
+
+        # если событие стало recurring
+        if instance.is_recurring:
+            if instance.recurrence:
+                for attr, value in recurrence_data.items():
+                    setattr(instance.recurrence, attr, value)
+                instance.recurrence.save()
+            else:
+                recurrence = RecurrenceRule.objects.create(**recurrence_data)
+                instance.recurrence = recurrence
+                instance.save()
+
+        # если убрали recurring
+        if not instance.is_recurring and instance.recurrence:
+            instance.recurrence.delete()
+            instance.recurrence = None
+            instance.save()
+
+        return instance
+
+
+class EventOccurrenceSerializer(serializers.Serializer):
+    event_id = serializers.UUIDField()
+    title = serializers.CharField()
+    date = serializers.DateField()
+    time = serializers.TimeField()
+    pet_id = serializers.UUIDField()

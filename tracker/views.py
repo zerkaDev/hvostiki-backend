@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.utils.dateparse import parse_date
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample, extend_schema_view, OpenApiParameter
 from rest_framework import status, permissions, viewsets
@@ -13,14 +14,16 @@ import logging
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from tracker.models import User, Pet, Breed, PetType
+from tracker.models import User, Pet, Breed, PetType, Event
 from tracker.serializers import (
     PhoneNumberSerializer,
     VerifyCodeSerializer,
     UserSerializer, PetSerializer, PetCreateSerializer, ErrorResponseSerializer, TokenResponseSerializer,
-    RefreshTokenSerializer, BreedSerializer,
+    RefreshTokenSerializer, BreedSerializer, EventSerializer,
+    EventOccurrenceSerializer,
 )
 from tracker.tasks import send_confirmation_code
+from tracker.utils import generate_occurrences
 
 logger = logging.getLogger(__name__)
 
@@ -568,3 +571,93 @@ class BreedListAPIView(APIView):
         serializer = BreedSerializer(breeds, many=True)
 
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@extend_schema_view(
+    create=extend_schema(
+        summary="Создать событие",
+        description="Создает одноразовое или повторяющееся событие",
+        request=EventSerializer,
+        responses={
+            201: EventSerializer,
+        },
+        examples=[
+            OpenApiExample(
+                name="Recurring weekly example",
+                value={
+                    "pet": "uuid",
+                    "title": "Дать таблетку",
+                    "description": "После еды",
+                    "start_date": "2026-02-20",
+                    "time": "18:00",
+                    "timezone": "Europe/Amsterdam",
+                    "is_recurring": True,
+                    "recurrence": {
+                        "frequency": "weekly",
+                        "interval": 1,
+                        "week_days": [1, 4]
+                    }
+                },
+                request_only=True,
+            )
+        ],
+    ),
+)
+class EventViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = EventSerializer
+    
+    def get_queryset(self):
+        return (
+            Event.objects
+            .filter(user=self.request.user)
+            .select_related("recurrence")
+        )
+
+    @extend_schema(
+        summary="Получить события за период",
+        description="Возвращает список всех событий (включая повторяющиеся) в выбранном диапазоне дат",
+        parameters=[
+            OpenApiParameter(
+                name="date_from",
+                type=OpenApiTypes.DATE,
+                location=OpenApiParameter.QUERY,
+                required=True,
+            ),
+            OpenApiParameter(
+                name="date_to",
+                type=OpenApiTypes.DATE,
+                location=OpenApiParameter.QUERY,
+                required=True,
+            ),
+        ],
+        responses={200: EventOccurrenceSerializer(many=True)},
+    )
+    @action(detail=False, methods=["get"])
+    def period(self, request):
+        date_from = parse_date(request.query_params.get("date_from"))
+        date_to = parse_date(request.query_params.get("date_to"))
+
+        if not date_from or not date_to:
+            return Response(
+                {"detail": "date_from and date_to are required"},
+                status=400,
+            )
+
+        events = self.get_queryset()
+        result = []
+
+        for event in events:
+            dates = generate_occurrences(event, date_from, date_to)
+
+            for d in dates:
+                result.append({
+                    "event_id": event.id,
+                    "title": event.title,
+                    "date": d,
+                    "time": event.time,
+                    "pet_id": event.pet_id,
+                })
+
+        serializer = EventOccurrenceSerializer(result, many=True)
+        return Response(serializer.data)

@@ -1,5 +1,6 @@
 import datetime
 
+from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator, MinValueValidator, FileExtensionValidator
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
@@ -207,3 +208,79 @@ class Pet(models.Model):
         verbose_name_plural = 'Питомцы'
         ordering = ['-created_at']
 
+
+class RecurrenceFrequency(models.TextChoices):
+    DAILY = "daily", "Daily"
+    WEEKLY = "weekly", "Weekly"
+    MONTHLY = "monthly", "Monthly"
+
+
+class RecurrenceRule(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    frequency = models.CharField(
+        max_length=10,
+        choices=RecurrenceFrequency.choices,
+    )
+    interval = models.PositiveIntegerField(default=1)
+
+    week_days = models.JSONField(blank=True, null=True)   # [1,4]
+    month_days = models.JSONField(blank=True, null=True)  # [5,20]
+
+    end_date = models.DateField(blank=True, null=True)
+
+    def clean(self):
+        if self.frequency == RecurrenceFrequency.WEEKLY and not self.week_days:
+            raise ValidationError("week_days required for weekly recurrence")
+
+        if self.frequency == RecurrenceFrequency.MONTHLY and not self.month_days:
+            raise ValidationError("month_days required for monthly recurrence")
+
+    def __str__(self):
+        return f"{self.frequency}"
+
+    class Meta:
+        verbose_name = 'Правило расписания'
+        verbose_name_plural = 'Правила расписаний'
+
+
+class Event(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    user = models.ForeignKey(User, related_name='events', on_delete=models.CASCADE, verbose_name='Пользователь')
+
+    pet = models.ForeignKey(
+        Pet,
+        on_delete=models.CASCADE,
+        related_name="events",
+    )
+
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+
+    start_date = models.DateField()
+    time = models.TimeField()
+    timezone = models.CharField(max_length=64)
+
+    is_recurring = models.BooleanField(default=False)
+
+    recurrence = models.ForeignKey(
+        RecurrenceRule,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="events",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def clean(self):
+        if self.is_recurring and not self.recurrence:
+            raise ValidationError("Recurring event must have recurrence rule")
+
+        if not self.is_recurring and self.recurrence:
+            raise ValidationError("Non-recurring event must not have recurrence rule")
+
+    def __str__(self):
+        return self.title

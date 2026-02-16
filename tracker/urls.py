@@ -6,22 +6,20 @@ from .views import (
     VerifyCodeView,
     ProfileView,
     LogoutView,
-    PetViewSet, RefreshTokenView, BreedListAPIView,
+    PetViewSet, RefreshTokenView, BreedListAPIView, EventViewSet,
 )
 
 router = DefaultRouter()
 router.register(r'pets', PetViewSet, basename='pet')
+router.register(r'event', EventViewSet, basename='event')
 
 urlpatterns = [
-    # Авторизация/регистрация
     path('auth/send-code/', SendCodeView.as_view(), name='send_code'),
     path('auth/verify-code/', VerifyCodeView.as_view(), name='verify_code'),
-
     path('auth/token/refresh/', RefreshTokenView.as_view(), name='token-refresh'),
     path('auth/logout/', LogoutView.as_view(), name='logout'),
-
     # Профиль
     path('profile/', ProfileView.as_view(), name='profile'),
-
-    path('', include(router.urls)),path('breeds/', BreedListAPIView.as_view(), name='breed-list'),
+    path('breeds/', BreedListAPIView.as_view(), name='breed-list'),
+    path('', include(router.urls)),
 ]
