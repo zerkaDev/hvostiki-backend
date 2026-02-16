@@ -284,3 +284,12 @@ class Event(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class EventNotificationLog(models.Model):
+    event = models.ForeignKey("Event", on_delete=models.CASCADE)
+    occurrence_date = models.DateField()
+    sent_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("event", "occurrence_date")

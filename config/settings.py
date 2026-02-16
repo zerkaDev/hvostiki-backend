@@ -191,6 +191,12 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
+CELERY_BEAT_SCHEDULE = {
+    "send-event-notifications-every-minute": {
+        "task": "events.tasks.send_event_notifications",
+        "schedule": 60.0,  # каждые 60 секунд
+    },
+}
 
 AUTHENTICATION_BACKENDS = [
     'tracker.backends.PhoneBackend',  # ваш кастомный бэкенд
