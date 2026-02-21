@@ -11,7 +11,7 @@ from .views import (
 
 router = DefaultRouter()
 router.register(r'pets', PetViewSet, basename='pet')
-router.register(r'event', EventViewSet, basename='event')
+router.register(r'event_schedule', EventViewSet, basename='event_schedule')
 
 urlpatterns = [
     path('auth/send-code/', SendCodeView.as_view(), name='send_code'),

@@ -4,6 +4,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample, extend_schema_view, OpenApiParameter
 from rest_framework import status, permissions, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import MethodNotAllowed
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.utils import timezone
@@ -606,13 +607,24 @@ class BreedListAPIView(APIView):
 class EventViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = EventSerializer
-    
+
     def get_queryset(self):
-        return (
+        pet_id = self.request.GET.get('pet_id', None)
+
+        queryset= (
             Event.objects
             .filter(user=self.request.user)
             .select_related("recurrence")
         )
+
+        if pet_id:
+            queryset = queryset.filter(pet_id=pet_id)
+
+        return queryset
+
+    @extend_schema(exclude=True)
+    def list(self, request, *args, **kwargs):
+        raise MethodNotAllowed('GET')
 
     @extend_schema(
         summary="Получить события за период",
@@ -630,13 +642,19 @@ class EventViewSet(viewsets.ModelViewSet):
                 location=OpenApiParameter.QUERY,
                 required=True,
             ),
+            OpenApiParameter(
+                name="pet_id",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+            ),
         ],
         responses={200: EventOccurrenceSerializer(many=True)},
     )
     @action(detail=False, methods=["get"])
     def period(self, request):
-        date_from = parse_date(request.query_params.get("date_from"))
-        date_to = parse_date(request.query_params.get("date_to"))
+        date_from = parse_date(request.query_params.get('date_from'))
+        date_to = parse_date(request.query_params.get('date_to'))
 
         if not date_from or not date_to:
             return Response(
