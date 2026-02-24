@@ -120,6 +120,21 @@ class PetType(models.TextChoices):
     DOG = 'dog', 'Собака'
 
 
+class EventTypeChoices(models.TextChoices):
+    DEWORMING = "deworming", "Deworming"
+    YEARLY_VACCINATION = "yearlyVaccination", "Yearly vaccination"
+    RABIES_VACCINATION = "rabiesVaccination", "Rabies vaccination"
+    WEEKLY_PILLS = "weeklyPills", "Weekly pills"
+    DAILY_PILLS = "dailyPills", "Daily pills"
+    GROOMING = "grooming", "Grooming"
+    BATHING = "bathing", "Bathing"
+    WALKING = "walking", "Walking"
+    FEEDING = "feeding", "Feeding"
+    NAIL_TRIMMING = "nailTrimming", "Nail trimming"
+    FLEA_TREATMENT = "fleaTreatment", "Flea treatment"
+    CUSTOM = "custom", "Custom"
+
+
 class Breed(models.Model):
     name = models.CharField(max_length=200, verbose_name='Название')
     type = models.CharField(
@@ -245,6 +260,7 @@ class RecurrenceRule(models.Model):
 
 
 class Event(models.Model):
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     user = models.ForeignKey(User, related_name='events', on_delete=models.CASCADE, verbose_name='Пользователь')
@@ -272,6 +288,13 @@ class Event(models.Model):
         related_name="events",
     )
 
+    done = models.BooleanField(default=False)
+    type = models.CharField(
+        max_length=32,
+        choices=EventTypeChoices.choices,
+        default=EventTypeChoices.CUSTOM,
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -290,6 +313,15 @@ class EventNotificationLog(models.Model):
     event = models.ForeignKey("Event", on_delete=models.CASCADE)
     occurrence_date = models.DateField()
     sent_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("event", "occurrence_date")
+
+
+class EventCompletion(models.Model):
+    event = models.ForeignKey("Event", on_delete=models.CASCADE)
+    occurrence_date = models.DateField()
+    done_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ("event", "occurrence_date")

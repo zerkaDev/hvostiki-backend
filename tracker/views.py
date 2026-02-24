@@ -15,7 +15,7 @@ import logging
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from tracker.models import User, Pet, Breed, PetType, Event
+from tracker.models import User, Pet, Breed, PetType, Event, EventCompletion
 from tracker.serializers import (
     PhoneNumberSerializer,
     VerifyCodeSerializer,
@@ -670,16 +670,99 @@ class EventViewSet(viewsets.ModelViewSet):
 
         for event in events:
             dates = generate_occurrences(event, date_from, date_to)
-            base_data = self.get_serializer(event).data
 
             for d in dates:
-                data = dict(base_data)
-                # Возвращаем объект события в том же формате, что и /event_schedule/{id}/,
-                # но с start_date, равным конкретной дате occurrence в периоде.
+                serializer = self.get_serializer(
+                    event,
+                    context={
+                        "request": request,
+                        "occurrence_date": d,
+                    },
+                )
+                data = dict(serializer.data)
+
                 data["start_date"] = d.isoformat()
                 data["timezone_offset"] = event.timezone_offset
-                data["time"] = shift_time_by_minutes(event.time, -event.timezone_offset).isoformat()
+                data["time"] = shift_time_by_minutes(
+                    event.time,
+                    -event.timezone_offset,
+                ).isoformat()
+
                 result.append(data)
 
         result.sort(key=lambda item: (item["start_date"], item.get("time") or ""))
         return Response(result)
+
+    @extend_schema(
+        summary="Отметить событие выполненным",
+        description=(
+                "Отмечает конкретный occurrence события как выполненный.\n\n"
+                "**Важно:**\n"
+                "- Для одноразового события передавайте его start_date\n"
+                "- Для повторяющегося — дату конкретного occurrence\n"
+                "- Повторный вызов безопасен (idempotent)\n"
+        ),
+        request=OpenApiTypes.OBJECT,
+        responses={
+            200: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Событие успешно отмечено выполненным",
+                examples=[
+                    OpenApiExample(
+                        name="Success",
+                        value={
+                            "done": True
+                        }
+                    )
+                ],
+            ),
+            400: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Некорректный запрос",
+                examples=[
+                    OpenApiExample(
+                        name="Missing date",
+                        value={
+                            "detail": "date is required"
+                        }
+                    )
+                ],
+            ),
+            404: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Событие не найдено",
+            ),
+        },
+        examples=[
+            OpenApiExample(
+                name="Mark occurrence done",
+                request_only=True,
+                value={
+                    "date": "2026-02-20"
+                },
+            )
+        ],
+        tags=["events"],
+    )
+    @action(detail=True, methods=["post"])
+    def mark_done(self, request, pk=None):
+        """
+        Отметить occurrence как выполненное.
+        """
+        event = self.get_object()
+        occurrence_date = request.data.get("date")
+
+        if not occurrence_date:
+            return Response(
+                {"detail": "date is required"},
+                status=400,
+            )
+
+        occurrence_date = parse_date(occurrence_date)
+
+        obj, created = EventCompletion.objects.get_or_create(
+            event=event,
+            occurrence_date=occurrence_date,
+        )
+
+        return Response({"done": True})

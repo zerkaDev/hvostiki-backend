@@ -2,7 +2,7 @@ from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
 
-from .models import Event, EventNotificationLog
+from .models import Event, EventNotificationLog, EventCompletion
 
 from tracker.services.ucalles_service import UCallerService
 from tracker.utils import generate_occurrences
@@ -38,6 +38,15 @@ def send_event_notifications():
         if not occurrences:
             continue
 
+        # Проверяем, не выполнено ли уже
+        is_done = EventCompletion.objects.filter(
+            event=event,
+            occurrence_date=today,
+        ).exists()
+
+        if is_done:
+            continue
+
         # Проверяем, не отправляли ли уже
         already_sent = EventNotificationLog.objects.filter(
             event=event,
@@ -47,7 +56,7 @@ def send_event_notifications():
         if already_sent:
             continue
 
-        # 👉 Отправка пуша
+        # TODO 👉 Отправка пуша
         # send_push(event)
 
         # Логируем

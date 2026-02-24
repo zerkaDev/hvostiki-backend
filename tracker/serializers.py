@@ -1,8 +1,7 @@
 from django.conf import settings
-from drf_spectacular.utils import extend_schema_serializer
 from rest_framework import serializers
 from django.utils import timezone
-from tracker.models import User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency
+from tracker.models import User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
 
 from .utils import normalize_phone, shift_time_by_minutes
 
@@ -187,6 +186,25 @@ class EventSerializer(serializers.ModelSerializer):
     # В запросах ждём time в UTC+0 и timezone_offset (минуты).
     timezone_offset = serializers.IntegerField(required=False)
 
+    done = serializers.SerializerMethodField()
+
+    def get_done(self, obj):
+        """
+        Проверяет выполнено ли событие.
+
+        context может содержать:
+        - occurrence_date (для period)
+        """
+        occurrence_date = self.context.get("occurrence_date")
+
+        if occurrence_date is None:
+            occurrence_date = obj.start_date
+
+        return EventCompletion.objects.filter(
+            event=obj,
+            occurrence_date=occurrence_date,
+        ).exists()
+
     class Meta:
         model = Event
         fields = (
@@ -199,6 +217,8 @@ class EventSerializer(serializers.ModelSerializer):
             "timezone_offset",
             "is_recurring",
             "recurrence",
+            'type',
+            'done',
         )
         read_only_fields = ("id",)
 
@@ -287,3 +307,10 @@ class EventOccurrenceSerializer(serializers.Serializer):
     date = serializers.DateField()
     time = serializers.TimeField()
     pet_id = serializers.UUIDField()
+
+
+class EventCompletionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventCompletion
+        fields = ("event", "occurrence_date", "done_at")
+        read_only_fields = ("done_at",)
