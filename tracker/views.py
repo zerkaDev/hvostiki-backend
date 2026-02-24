@@ -23,7 +23,7 @@ from tracker.serializers import (
     RefreshTokenSerializer, BreedSerializer, EventSerializer,
 )
 from tracker.tasks import send_confirmation_code
-from tracker.utils import generate_occurrences
+from tracker.utils import generate_occurrences, shift_time_by_minutes, timezone_offset_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -589,8 +589,8 @@ class BreedListAPIView(APIView):
                     "title": "Дать таблетку",
                     "description": "После еды",
                     "start_date": "2026-02-20",
-                    "time": "18:00",
-                    "timezone": "Europe/Amsterdam",
+                    "time": "17:00",
+                    "timezone_offset": 60,
                     "is_recurring": True,
                     "recurrence": {
                         "frequency": "weekly",
@@ -676,7 +676,11 @@ class EventViewSet(viewsets.ModelViewSet):
                 data = dict(base_data)
                 # Возвращаем объект события в том же формате, что и /event_schedule/{id}/,
                 # но с start_date, равным конкретной дате occurrence в периоде.
-                data["start_date"] = d
+                data["start_date"] = d.isoformat()
+                offset = timezone_offset_minutes(event.timezone, d, event.time)
+                data["timezone_offset"] = offset
+                if offset is not None:
+                    data["time"] = shift_time_by_minutes(event.time, -offset).isoformat()
                 result.append(data)
 
         result.sort(key=lambda item: (item["start_date"], item.get("time") or ""))

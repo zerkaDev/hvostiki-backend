@@ -1,6 +1,7 @@
 from celery import shared_task
 from django.utils import timezone
 import pytz
+from datetime import timedelta
 
 from .models import Event, EventNotificationLog
 
@@ -21,12 +22,18 @@ def send_event_notifications():
     events = Event.objects.select_related("recurrence").all()
 
     for event in events:
+        # Поддержка двух форматов:
+        # - старый: event.timezone = IANA string ("Europe/Amsterdam")
+        # - новый: event.timezone = строка с offset минутами ("180")
         try:
-            user_tz = pytz.timezone(event.timezone)
+            offset_minutes = int(event.timezone)
+            now_local = now_utc + timedelta(minutes=offset_minutes)
         except Exception:
-            continue
-
-        now_local = now_utc.astimezone(user_tz)
+            try:
+                user_tz = pytz.timezone(event.timezone)
+                now_local = now_utc.astimezone(user_tz)
+            except Exception:
+                continue
 
         # Проверяем совпадение времени (по минуте)
         if (
