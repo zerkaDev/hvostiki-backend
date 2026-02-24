@@ -260,7 +260,7 @@ class Event(models.Model):
 
     start_date = models.DateField()
     time = models.TimeField()
-    timezone = models.CharField(max_length=64)
+    timezone_offset = models.IntegerField(default=0)
 
     is_recurring = models.BooleanField(default=False)
 

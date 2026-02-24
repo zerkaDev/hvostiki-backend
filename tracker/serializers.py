@@ -4,7 +4,7 @@ from rest_framework import serializers
 from django.utils import timezone
 from tracker.models import User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency
 
-from .utils import normalize_phone
+from .utils import normalize_phone, shift_time_by_minutes
 
 
 class PhoneNumberSerializer(serializers.Serializer):
@@ -184,6 +184,8 @@ class RecurrenceRuleSerializer(serializers.ModelSerializer):
 
 class EventSerializer(serializers.ModelSerializer):
     recurrence = RecurrenceRuleSerializer(required=False, allow_null=True)
+    # В запросах ждём time в UTC+0 и timezone_offset (минуты).
+    timezone_offset = serializers.IntegerField(required=False)
 
     class Meta:
         model = Event
@@ -194,13 +196,33 @@ class EventSerializer(serializers.ModelSerializer):
             "description",
             "start_date",
             "time",
-            "timezone",
+            "timezone_offset",
             "is_recurring",
             "recurrence",
         )
         read_only_fields = ("id",)
 
+    def validate_timezone_offset(self, value):
+        # Реалистичный диапазон часовых поясов: [-14:00, +14:00]
+        if value < -14 * 60 or value > 14 * 60:
+            raise serializers.ValidationError("timezone_offset out of range.")
+        return value
+
     def validate(self, data):
+        # Клиент присылает time в UTC+0. В базе храним локальное время (UTC + timezone_offset),
+        # чтобы повторяющиеся события работали "по местному времени" как раньше.
+        if self.instance is None and data.get("timezone_offset") is None:
+            raise serializers.ValidationError(
+                {"timezone_offset": "timezone_offset is required (minutes offset relative to UTC)."}
+            )
+
+        effective_offset = data.get("timezone_offset")
+        if effective_offset is None and self.instance is not None:
+            effective_offset = self.instance.timezone_offset
+
+        if effective_offset is not None and "time" in data and data["time"] is not None:
+            data["time"] = shift_time_by_minutes(data["time"], effective_offset)
+
         is_recurring = data.get("is_recurring")
         recurrence = data.get("recurrence")
 
@@ -211,6 +233,14 @@ class EventSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Non-recurring event must not include recurrence")
 
         return data
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+
+        # Возвращаем time как UTC+0 (клиент затем сам применит timezone_offset для локального отображения)
+        if instance.time is not None:
+            rep["time"] = shift_time_by_minutes(instance.time, -instance.timezone_offset).isoformat()
+        return rep
 
     def create(self, validated_data):
         recurrence_data = validated_data.pop("recurrence", None)

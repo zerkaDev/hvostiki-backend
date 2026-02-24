@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date as date_type, datetime, time as time_type, timedelta
 
 
 def normalize_phone(phone: str) -> str:
@@ -52,3 +52,15 @@ def generate_occurrences(event, date_from, date_to):
         current += timedelta(days=1)
 
     return occurrences
+
+
+def shift_time_by_minutes(value: time_type, delta_minutes: int) -> time_type:
+    """
+    Сдвигает time на delta_minutes с переходом через сутки (mod 24h).
+    """
+    if value is None:
+        return None
+
+    base = datetime.combine(date_type(2000, 1, 1), value)
+    shifted = base + timedelta(minutes=int(delta_minutes))
+    return shifted.time()

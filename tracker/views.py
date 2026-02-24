@@ -21,10 +21,9 @@ from tracker.serializers import (
     VerifyCodeSerializer,
     UserSerializer, PetSerializer, PetCreateSerializer, ErrorResponseSerializer, TokenResponseSerializer,
     RefreshTokenSerializer, BreedSerializer, EventSerializer,
-    EventOccurrenceSerializer,
 )
 from tracker.tasks import send_confirmation_code
-from tracker.utils import generate_occurrences
+from tracker.utils import generate_occurrences, shift_time_by_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -590,8 +589,8 @@ class BreedListAPIView(APIView):
                     "title": "Дать таблетку",
                     "description": "После еды",
                     "start_date": "2026-02-20",
-                    "time": "18:00",
-                    "timezone": "Europe/Amsterdam",
+                    "time": "17:00",
+                    "timezone_offset": 60,
                     "is_recurring": True,
                     "recurrence": {
                         "frequency": "weekly",
@@ -628,7 +627,11 @@ class EventViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         summary="Получить события за период",
-        description="Возвращает список всех событий (включая повторяющиеся) в выбранном диапазоне дат",
+        description=(
+            "Возвращает список всех событий (включая повторяющиеся) в выбранном диапазоне дат. "
+            "Формат элементов ответа совпадает с /event_schedule/{id}/ (EventSerializer); "
+            "для повторяющихся событий поле start_date равно конкретной дате occurrence в диапазоне."
+        ),
         parameters=[
             OpenApiParameter(
                 name="date_from",
@@ -649,7 +652,7 @@ class EventViewSet(viewsets.ModelViewSet):
                 required=False,
             ),
         ],
-        responses={200: EventOccurrenceSerializer(many=True)},
+        responses={200: EventSerializer(many=True)},
     )
     @action(detail=False, methods=["get"])
     def period(self, request):
@@ -667,15 +670,16 @@ class EventViewSet(viewsets.ModelViewSet):
 
         for event in events:
             dates = generate_occurrences(event, date_from, date_to)
+            base_data = self.get_serializer(event).data
 
             for d in dates:
-                result.append({
-                    "event_id": event.id,
-                    "title": event.title,
-                    "date": d,
-                    "time": event.time,
-                    "pet_id": event.pet_id,
-                })
+                data = dict(base_data)
+                # Возвращаем объект события в том же формате, что и /event_schedule/{id}/,
+                # но с start_date, равным конкретной дате occurrence в периоде.
+                data["start_date"] = d.isoformat()
+                data["timezone_offset"] = event.timezone_offset
+                data["time"] = shift_time_by_minutes(event.time, -event.timezone_offset).isoformat()
+                result.append(data)
 
-        serializer = EventOccurrenceSerializer(result, many=True)
-        return Response(serializer.data)
+        result.sort(key=lambda item: (item["start_date"], item.get("time") or ""))
+        return Response(result)
