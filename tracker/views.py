@@ -23,7 +23,7 @@ from tracker.serializers import (
     RefreshTokenSerializer, BreedSerializer, EventSerializer,
 )
 from tracker.tasks import send_confirmation_code
-from tracker.utils import generate_occurrences, shift_time_by_minutes, timezone_offset_minutes
+from tracker.utils import generate_occurrences, shift_time_by_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -677,10 +677,8 @@ class EventViewSet(viewsets.ModelViewSet):
                 # Возвращаем объект события в том же формате, что и /event_schedule/{id}/,
                 # но с start_date, равным конкретной дате occurrence в периоде.
                 data["start_date"] = d.isoformat()
-                offset = timezone_offset_minutes(event.timezone, d, event.time)
-                data["timezone_offset"] = offset
-                if offset is not None:
-                    data["time"] = shift_time_by_minutes(event.time, -offset).isoformat()
+                data["timezone_offset"] = event.timezone_offset
+                data["time"] = shift_time_by_minutes(event.time, -event.timezone_offset).isoformat()
                 result.append(data)
 
         result.sort(key=lambda item: (item["start_date"], item.get("time") or ""))
