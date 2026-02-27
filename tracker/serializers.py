@@ -1,4 +1,6 @@
 from django.conf import settings
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from django.utils import timezone
 from tracker.models import User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
@@ -188,6 +190,7 @@ class EventSerializer(serializers.ModelSerializer):
 
     done = serializers.SerializerMethodField()
 
+    @extend_schema_field(OpenApiTypes.BOOL)
     def get_done(self, obj):
         """
         Проверяет выполнено ли событие.
