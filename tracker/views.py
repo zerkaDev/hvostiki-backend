@@ -242,6 +242,12 @@ class VerifyCodeView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         user = serializer.validated_data['user']
+        
+        # Обновляем состояние пользователя после успешной проверки кода
+        user.reset_code_attempts()
+        user.is_verified = True
+        user.last_login = timezone.now()
+        user.save(update_fields=['is_verified', 'last_login', 'code_attempts'])
 
         refresh = RefreshToken.for_user(user)
 

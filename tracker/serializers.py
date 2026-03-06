@@ -14,13 +14,17 @@ class PhoneNumberSerializer(serializers.Serializer):
 
     def validate_phone_number(self, value):
         """Базовая валидация номера телефона"""
-        # Убираем все нецифровые символы кроме +
-        cleaned = ''.join(c for c in value if c.isdigit() or c == '+')
+        # Убираем все нецифровые символы
+        cleaned = ''.join(c for c in value if c.isdigit())
+        
+        # Нормализуем перед проверкой длины (8 -> 7 и т.д.)
+        normalized = normalize_phone(cleaned)
 
-        # Простая проверка длины
-        if len(cleaned) not in (12, 11, 10):
-            raise serializers.ValidationError("Номер телефона невалидный")
-        return normalize_phone(cleaned)
+        # Проверка на соответствие формату 7XXXXXXXXXX (11 цифр)
+        if len(normalized) != 11 or not normalized.startswith('7'):
+            raise serializers.ValidationError("Номер телефона должен быть в формате 7XXXXXXXXXX")
+            
+        return normalized
 
 
 class VerifyCodeSerializer(serializers.Serializer):
@@ -32,7 +36,10 @@ class VerifyCodeSerializer(serializers.Serializer):
         phone_number = normalize_phone(data['phone_number'])
         code = data['code']
 
-        user = User.objects.get(phone_number=phone_number)
+        try:
+            user = User.objects.get(phone_number=phone_number)
+        except User.DoesNotExist:
+            raise serializers.ValidationError({"phone_number": "Пользователь с таким номером не найден"})
 
         # Проверяем, не истек ли код
         if user.is_code_expired:
@@ -47,29 +54,19 @@ class VerifyCodeSerializer(serializers.Serializer):
             })
 
         # Проверяем код
-        if settings.DEBUG:
-           if code != '1234':
-                user.increment_code_attempts()
-                attempts_left = 5 - user.code_attempts
-                raise serializers.ValidationError({
-                    "code": f"Неверный код. Осталось попыток: {attempts_left}"
-                })
-        else:
-            if user.confirmation_code != code:
-                user.increment_code_attempts()
-                attempts_left = 5 - user.code_attempts
-                raise serializers.ValidationError({
-                    "code": f"Неверный код. Осталось попыток: {attempts_left}"
-                })
+        expected_code = '1234' if settings.DEBUG else user.confirmation_code
+        
+        if code != expected_code:
+            user.increment_code_attempts()
+            attempts_left = 5 - user.code_attempts
+            raise serializers.ValidationError({
+                "code": f"Неверный код. Осталось попыток: {max(0, attempts_left)}"
+            })
 
-        # Код верный
-        user.reset_code_attempts()
-        user.is_verified = True
-        user.last_login = timezone.now()
-        user.save()
-
+        # Код верный - сохраняем пользователя в валидированных данных
+        # Обновление состояния пользователя (is_verified) лучше делать в представлении
+        # после успешной валидации всех полей.
         data['user'] = user
-
         return data
 
 
@@ -84,7 +81,7 @@ class UserSerializer(serializers.ModelSerializer):
             'is_verified',
             'created_at',
         ]
-        read_only_fields = ['id', 'phone_number', 'is_verified', 'created_at']
+        read_only_fields = fields
 
 
 class BreedSerializer(serializers.ModelSerializer):
@@ -94,8 +91,10 @@ class BreedSerializer(serializers.ModelSerializer):
 
 
 class PetSerializer(serializers.ModelSerializer):
+    """Сериализатор для работы с питомцами (просмотр и создание)"""
     owner_id = serializers.ReadOnlyField(source='owner.id')
-    breed_obj = BreedSerializer(read_only=True, source='breed')
+    # Используем PrimaryKeyRelatedField для записи и BreedSerializer для чтения (через to_representation)
+    breed = serializers.PrimaryKeyRelatedField(queryset=Breed.objects.all())
 
     class Meta:
         model = Pet
@@ -104,7 +103,7 @@ class PetSerializer(serializers.ModelSerializer):
             'owner_id',
             'name',
             'pet_type',
-            'breed_obj',
+            'breed',
             'weight',
             'birthday',
             'gender',
@@ -114,7 +113,7 @@ class PetSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at'
         ]
-        read_only_fields = ['created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at', 'owner_id']
 
     def validate_weight(self, value):
         """Проверка веса"""
@@ -124,23 +123,16 @@ class PetSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Вес не может превышать 200 кг")
         return value
 
+    def to_representation(self, instance):
+        """Возвращаем полный объект породы при чтении"""
+        representation = super().to_representation(instance)
+        representation['breed_obj'] = BreedSerializer(instance.breed).data
+        return representation
 
-class PetCreateSerializer(serializers.ModelSerializer):
-    """Сериализатор для создания питомца (без read_only полей)"""
 
-    class Meta:
-        model = Pet
-        fields = [
-            'name',
-            'pet_type',
-            'breed',
-            'weight',
-            'color',
-            'image',
-            'birthday',
-            'gender',
-            'has_castration'
-        ]
+class PetCreateSerializer(PetSerializer):
+    """Оставлен для совместимости с вьюсетами, если требуется другое поведение"""
+    pass
 
 
 class TokenResponseSerializer(serializers.Serializer):
@@ -193,10 +185,7 @@ class EventSerializer(serializers.ModelSerializer):
     @extend_schema_field(OpenApiTypes.BOOL)
     def get_done(self, obj):
         """
-        Проверяет выполнено ли событие.
-
-        context может содержать:
-        - occurrence_date (для period)
+        Проверяет выполнено ли событие на конкретную дату.
         """
         occurrence_date = self.context.get("occurrence_date")
 
@@ -232,8 +221,7 @@ class EventSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, data):
-        # Клиент присылает time в UTC+0. В базе храним локальное время (UTC + timezone_offset),
-        # чтобы повторяющиеся события работали "по местному времени" как раньше.
+        # Клиент присылает time в UTC+0. В базе храним локальное время (UTC + timezone_offset)
         if self.instance is None and data.get("timezone_offset") is None:
             raise serializers.ValidationError(
                 {"timezone_offset": "timezone_offset is required (minutes offset relative to UTC)."}
@@ -246,10 +234,10 @@ class EventSerializer(serializers.ModelSerializer):
         if effective_offset is not None and "time" in data and data["time"] is not None:
             data["time"] = shift_time_by_minutes(data["time"], effective_offset)
 
-        is_recurring = data.get("is_recurring")
+        is_recurring = data.get("is_recurring", self.instance.is_recurring if self.instance else False)
         recurrence = data.get("recurrence")
 
-        if is_recurring and not recurrence:
+        if is_recurring and not recurrence and not (self.instance and self.instance.recurrence):
             raise serializers.ValidationError("Recurring event must include recurrence")
 
         if not is_recurring and recurrence:
@@ -260,7 +248,7 @@ class EventSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         rep = super().to_representation(instance)
 
-        # Возвращаем time как UTC+0 (клиент затем сам применит timezone_offset для локального отображения)
+        # Возвращаем time как UTC+0
         if instance.time is not None:
             rep["time"] = shift_time_by_minutes(instance.time, -instance.timezone_offset).isoformat()
         return rep
@@ -282,25 +270,23 @@ class EventSerializer(serializers.ModelSerializer):
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 
-        instance.save()
-
-        # если событие стало recurring
+        # если событие стало recurring или обновило параметры повторения
         if instance.is_recurring:
             if instance.recurrence:
-                for attr, value in recurrence_data.items():
-                    setattr(instance.recurrence, attr, value)
-                instance.recurrence.save()
-            else:
+                if recurrence_data:
+                    for attr, value in recurrence_data.items():
+                        setattr(instance.recurrence, attr, value)
+                    instance.recurrence.save()
+            elif recurrence_data:
                 recurrence = RecurrenceRule.objects.create(**recurrence_data)
                 instance.recurrence = recurrence
-                instance.save()
 
         # если убрали recurring
-        if not instance.is_recurring and instance.recurrence:
+        elif instance.recurrence:
             instance.recurrence.delete()
             instance.recurrence = None
-            instance.save()
-
+            
+        instance.save()
         return instance
 
 
