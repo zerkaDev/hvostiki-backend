@@ -259,16 +259,35 @@ EVENT_VIEWSET_SCHEMAS = {
     'period': extend_schema(
         summary='Получить события за период',
         description="""
-            Возвращает список всех событий (включая повторяющиеся) в выбранном диапазоне дат. 
-            Формат элементов ответа совпадает с /event_schedule/{id}/ (EventSerializer); 
-            для повторяющихся событий поле start_date равно конкретной дате occurrence в диапазоне.
+            Возвращает словарь событий, сгруппированный по датам. 
+            Ключ — дата в формате YYYY-MM-DD, значение — список событий в эту дату.
+            Словарь отсортирован по датам, события внутри даты — по времени.
             """,
         parameters=[
             OpenApiParameter(name='date_from', type=OpenApiTypes.DATE, location=OpenApiParameter.QUERY, required=True),
             OpenApiParameter(name='date_to', type=OpenApiTypes.DATE, location=OpenApiParameter.QUERY, required=True),
             OpenApiParameter(name='pet_id', type=OpenApiTypes.UUID, location=OpenApiParameter.QUERY, required=False),
         ],
-        responses={200: EventSerializer(many=True)},
+        responses={
+            200: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description='Сгруппированный список событий',
+                examples=[
+                    OpenApiExample(
+                        'Пример сгруппированного ответа',
+                        value={
+                            '2026-03-06': [
+                                {'id': 'uuid', 'title': 'Утреннее кормление', 'time': '08:00', 'done': False},
+                                {'id': 'uuid', 'title': 'Прогулка', 'time': '12:00', 'done': True}
+                            ],
+                            '2026-03-07': [
+                                {'id': 'uuid', 'title': 'Визит к ветеринару', 'time': '10:00', 'done': False}
+                            ]
+                        }
+                    )
+                ]
+            )
+        },
     ),
     'mark_done': extend_schema(
         summary='Отметить событие выполненным',

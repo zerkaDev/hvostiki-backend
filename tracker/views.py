@@ -1,5 +1,6 @@
 import random
 import logging
+from collections import defaultdict
 from django.conf import settings
 from django.utils.dateparse import parse_date
 from django.utils import timezone
@@ -19,7 +20,7 @@ from tracker.serializers import (
     PetSerializer, PetCreateSerializer, BreedSerializer, EventSerializer
 )
 from tracker.tasks import send_confirmation_code
-from tracker.utils import generate_occurrences, shift_time_by_minutes
+from tracker.utils import generate_occurrences
 from tracker import schemas
 
 logger = logging.getLogger(__name__)
@@ -197,7 +198,7 @@ class EventViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def period(self, request):
-        """События за период (с учетом повторений)"""
+        """События за период (сгруппированные по датам)"""
         date_from = parse_date(request.query_params.get('date_from'))
         date_to = parse_date(request.query_params.get('date_to'))
 
@@ -205,20 +206,28 @@ class EventViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'date_from and date_to are required'}, status=400)
 
         events = self.get_queryset()
-        result = []
+        grouped_result = defaultdict(list)
 
         for event in events:
             for d in generate_occurrences(event, date_from, date_to):
                 serializer = self.get_serializer(event, context={'request': request, 'occurrence_date': d})
                 data = dict(serializer.data)
-                data.update({
-                    'start_date': d.isoformat(),
-                    'time': shift_time_by_minutes(event.time, -event.timezone_offset).isoformat()
-                })
-                result.append(data)
+                
+                # Обновляем дату начала для конкретного вхождения
+                data['start_date'] = d.isoformat()
+                
+                date_key = data['start_date']
+                grouped_result[date_key].append(data)
 
-        result.sort(key=lambda x: (x['start_date'], x.get('time', '')))
-        return Response(result)
+        # Сортируем события внутри каждой даты по времени
+        for date_key in grouped_result:
+            grouped_result[date_key].sort(key=lambda x: x.get('time', ''))
+
+        # Возвращаем словарь, отсортированный по ключам-датам
+        sorted_keys = sorted(grouped_result.keys())
+        final_result = {key: grouped_result[key] for key in sorted_keys}
+
+        return Response(final_result)
 
     @action(detail=True, methods=['post'])
     def mark_done(self, request, pk=None):
