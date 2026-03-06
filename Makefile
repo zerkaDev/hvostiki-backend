@@ -8,12 +8,29 @@ SERVICE = web
 
 help:
 	@echo "Available commands:"
-	@echo "  make up        - start containers"
-	@echo "  make down      - stop containers"
-	@echo "  make restart   - restart containers"
-	@echo "  make ps        - show containers"
-	@echo "  make logs      - logs for web"
-	@echo "  make build     - rebuild images"
+	@echo "  make up        - Start containers in background"
+	@echo "  make down      - Stop and remove containers"
+	@echo "  make restart   - Restart containers"
+	@echo "  make ps        - List running containers"
+	@echo "  make logs      - Show and follow logs for web service"
+	@echo "  make build     - Rebuild images"
+	@echo ""
+	@echo "Django commands:"
+	@echo "  make shell     - Open shell in web container"
+	@echo "  make ds        - Open Django shell (shell_plus or regular)"
+	@echo "  make migrate   - Run migrations"
+	@echo "  make mm        - Make migrations AND migrate"
+	@echo "  make su        - Create superuser"
+	@echo "  make static    - Collect static files"
+	@echo ""
+	@echo "Tests & Linting:"
+	@echo "  make test      - Run all tests (usage: make test args=\"-v path/to/test\")"
+	@echo "  make lint      - Check code style (black)"
+	@echo "  make format    - Autoformat code (black)"
+	@echo ""
+	@echo "Utils:"
+	@echo "  make clean     - Stop and remove volumes/orphans"
+	@echo "  make reset-db  - Flush database (CAUTION!)"
 
 up:
 	$(DC) -f $(FILE) up -d
@@ -22,8 +39,8 @@ down:
 	$(DC) -f $(FILE) down
 
 restart:
-	make down
-	make up
+	$(DC) -f $(FILE) down
+	$(DC) -f $(FILE) up -d
 
 ps:
 	$(DC) -f $(FILE) ps
@@ -35,36 +52,39 @@ build:
 	$(DC) -f $(FILE) build
 
 # ====== DJANGO ======
-.PHONY: shell django-shell migrate makemigrations createsuperuser collectstatic
+.PHONY: shell ds migrate mm su static
 
 shell:
 	$(DC) -f $(FILE) exec $(SERVICE) sh
 
-django-shell:
+ds:
 	$(DC) -f $(FILE) exec $(SERVICE) python manage.py shell_plus || \
 	$(DC) -f $(FILE) exec $(SERVICE) python manage.py shell
 
 migrate:
 	$(DC) -f $(FILE) exec $(SERVICE) python manage.py migrate
 
-makemigrations:
+mm:
 	$(DC) -f $(FILE) exec $(SERVICE) python manage.py makemigrations
+	$(DC) -f $(FILE) exec $(SERVICE) python manage.py migrate
 
-createsuperuser:
+su:
 	$(DC) -f $(FILE) exec $(SERVICE) python manage.py createsuperuser
 
-collectstatic:
+static:
 	$(DC) -f $(FILE) exec $(SERVICE) python manage.py collectstatic --noinput
 
-# ====== TESTS ======
-.PHONY: test test-one
+# ====== TESTS & LINTING ======
+.PHONY: test lint format
 
 test:
-	$(DC) -f $(FILE) exec $(SERVICE) pytest
+	$(DC) -f $(FILE) exec $(SERVICE) pytest $(args)
 
-test-one:
-	@read -p "Test path: " path; \
-	$(DC) -f $(FILE) exec $(SERVICE) pytest $$path
+lint:
+	$(DC) -f $(FILE) exec $(SERVICE) black --check .
+
+format:
+	$(DC) -f $(FILE) exec $(SERVICE) black .
 
 # ====== UTILS ======
 .PHONY: clean reset-db
