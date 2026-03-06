@@ -117,9 +117,9 @@ class PetSerializer(serializers.ModelSerializer):
     def validate_weight(self, value):
         """Проверка веса"""
         if value <= 0:
-            raise serializers.ValidationError("Вес должен быть положительным числом")
+            raise serializers.ValidationError('Вес должен быть положительным числом')
         if value > 200:  # Максимальный вес 200 кг (для больших собак)
-            raise serializers.ValidationError("Вес не может превышать 200 кг")
+            raise serializers.ValidationError('Вес не может превышать 200 кг')
         return value
 
     def to_representation(self, instance):

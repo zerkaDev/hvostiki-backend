@@ -1,256 +1,85 @@
-from django.conf import settings
-from django.utils.dateparse import parse_date
-from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample, extend_schema_view, OpenApiParameter
-from rest_framework import status, permissions, viewsets
-from rest_framework.decorators import action
-from rest_framework.exceptions import MethodNotAllowed
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from django.utils import timezone
-from django.core.cache import cache
 import random
 import logging
-
+from django.conf import settings
+from django.utils.dateparse import parse_date
+from django.utils import timezone
+from django.core.cache import cache
+from rest_framework import status, permissions, viewsets, generics
+from rest_framework.decorators import action
+from rest_framework.exceptions import MethodNotAllowed, ValidationError
+from rest_framework.views import APIView
+from rest_framework.response import Response
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
+from drf_spectacular.utils import extend_schema_view
 
 from tracker.models import User, Pet, Breed, PetType, Event, EventCompletion
 from tracker.serializers import (
-    PhoneNumberSerializer,
-    VerifyCodeSerializer,
-    UserSerializer, PetSerializer, PetCreateSerializer, ErrorResponseSerializer, TokenResponseSerializer,
-    RefreshTokenSerializer, BreedSerializer, EventSerializer,
+    PhoneNumberSerializer, VerifyCodeSerializer, UserSerializer, 
+    PetSerializer, PetCreateSerializer, BreedSerializer, EventSerializer
 )
 from tracker.tasks import send_confirmation_code
 from tracker.utils import generate_occurrences, shift_time_by_minutes
+from tracker import schemas
 
 logger = logging.getLogger(__name__)
 
+# --- Authentication Views ---
 
 class SendCodeView(APIView):
-    """
-    Отправка кода подтверждения на номер телефона
-
-    Пользователь вводит номер → отправляем код → ждем подтверждения
-
-    **Логика работы:**
-    1. Проверяет, не отправлялся ли код в последнюю минуту
-    2. Генерирует 4-значный код
-    3. Создает/обновляет пользователя с кодом
-    4. Отправляет код через SMS (в продакшене)
-    5. Устанавливает таймаут для повторной отправки
-    """
+    """Отправка кода подтверждения на номер телефона"""
     permission_classes = [permissions.AllowAny]
 
-    @extend_schema(
-        tags=['Аутентификация'],
-        summary='Отправка кода подтверждения',
-        description="""
-            Отправляет SMS с кодом подтверждения на указанный номер телефона.
-
-            **Ограничения:**
-            - Код можно запрашивать не чаще 1 раза в минуту
-            - В режиме DEBUG код возвращается в ответе
-            - В продакшене код отправляется через SMS сервис
-            """,
-        request=PhoneNumberSerializer,
-        responses={
-            200: OpenApiResponse(
-                response=OpenApiTypes.OBJECT,
-                description='Код успешно отправлен',
-                examples=[
-                    OpenApiExample(
-                        'Успешная отправка',
-                        value={
-                            'detail': 'Код подтверждения отправлен',
-                            'phone_number': '+79991234567',
-                            'resend_timeout': 60
-                        }
-                    )
-                ]
-            ),
-            400: OpenApiResponse(
-                response=OpenApiTypes.OBJECT,
-                description='Неверный формат номера телефона',
-                examples=[
-                    OpenApiExample(
-                        'Ошибка валидации',
-                        value={
-                            'phone_number': [
-                                'Введите корректный номер телефона.'
-                            ]
-                        }
-                    )
-                ]
-            ),
-            429: OpenApiResponse(
-                response=OpenApiTypes.OBJECT,
-                description='Слишком много запросов',
-                examples=[
-                    OpenApiExample(
-                        'Повторная отправка',
-                        value={
-                            'error': 'Код уже отправлен. Попробуйте через 1 минуту.'
-                        }
-                    )
-                ]
-            )
-        },
-        examples=[
-            OpenApiExample(
-                'Пример запроса',
-                value={'phone_number': '+79991234567'},
-                request_only=True
-            )
-        ]
-    )
+    @schemas.SEND_CODE_SCHEMA
     def post(self, request):
         serializer = PhoneNumberSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.is_valid(raise_exception=True)
         phone_number = serializer.validated_data['phone_number']
 
         cache_key = f'code_sent_{phone_number}'
         if cache.get(cache_key):
-            return Response({
-                'error': 'Код уже отправлен. Попробуйте через 1 минуту.'
-            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            return Response(
+                {'error': 'Код уже отправлен. Попробуйте через 1 минуту.'}, 
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
 
         code = str(random.randint(1000, 9999))
-
-        user = User.objects.filter(phone_number=phone_number).first()
-        if not user:
-            # Создаем неактивированного пользователя
-             User.objects.create_user(
-                phone_number=phone_number,
-                confirmation_code=code,
-                code_sent_at=timezone.now(),
-                is_verified=False
-            )
-        else:
-            # Обновляем код у существующего пользователя
-            user.confirmation_code = code
-            user.code_sent_at = timezone.now()
-            user.code_attempts = 0
-            user.save(update_fields=['confirmation_code', 'code_sent_at', 'code_attempts'])
+        user, created = User.objects.get_or_create(phone_number=phone_number)
+        
+        user.confirmation_code = code
+        user.code_sent_at = timezone.now()
+        user.code_attempts = 0
+        user.save(update_fields=['confirmation_code', 'code_sent_at', 'code_attempts'])
 
         if not settings.DEBUG:
             send_confirmation_code.delay(phone_number, code)
 
         logger.info(f'Код {code} отправлен на номер {phone_number}')
-
         cache.set(cache_key, True, timeout=60)
 
         return Response({
             'detail': 'Код подтверждения отправлен',
             'phone_number': phone_number,
             'resend_timeout': 60
-        }, status=status.HTTP_200_OK)
-
+        })
 
 
 class VerifyCodeView(APIView):
-    """
-    Проверка кода подтверждения
-
-    Пользователь вводит код → создаем/авторизуем пользователя → возвращаем токен
-
-    **Логика работы:**
-    1. Проверяет код через VerifyCodeSerializer
-    2. Активирует пользователя (если был неактивен)
-    3. Генерирует JWT токены (access и refresh)
-    4. Возвращает токены с информацией об истечении
-    """
+    """Проверка кода подтверждения и выдача JWT"""
     permission_classes = [permissions.AllowAny]
 
-    @extend_schema(
-        tags=['Аутентификация'],
-        summary='Подтверждение кода',
-        description="""
-        Проверяет код подтверждения и возвращает JWT токены для аутентификации.
-        
-        **Особенности:**
-        - Код действителен 10 минут
-        - После 5 неудачных попыток аккаунт блокируется на 15 минут
-        - При успешной проверке пользователь активируется (is_verified=True)
-        - Для дебага можно ввести 1234 чтобы пройти проверку
-        """,
-        request=VerifyCodeSerializer,
-        responses={
-            200: OpenApiResponse(
-                response=OpenApiTypes.OBJECT,
-                description='Код подтвержден, токены получены',
-                examples=[
-                    OpenApiExample(
-                        'Успешная аутентификация',
-                        value={
-                            'refresh': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
-                            'access': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
-                            'access_expires': 1736000000,
-                            'refresh_expires': 1736000000
-                        }
-                    )
-                ]
-            ),
-            400: OpenApiResponse(
-                response=OpenApiTypes.OBJECT,
-                description='Неверный код или номер',
-                examples=[
-                    OpenApiExample(
-                        'Неверный код',
-                        value={
-                            'code': ['Неверный код подтверждения.']
-                        }
-                    ),
-                    OpenApiExample(
-                        'Истек срок действия',
-                        value={
-                            'non_field_errors': ['Срок действия кода истек.']
-                        }
-                    )
-                ]
-            ),
-            403: OpenApiResponse(
-                response=OpenApiTypes.OBJECT,
-                description='Аккаунт заблокирован',
-                examples=[
-                    OpenApiExample(
-                        'Превышены попытки',
-                        value={
-                            'error': 'Аккаунт заблокирован. Попробуйте через 15 минут.'
-                        }
-                    )
-                ]
-            )
-        },
-        examples=[
-            OpenApiExample(
-                'Пример запроса',
-                value={
-                    'phone_number': '+79991234567',
-                    'code': '1234'
-                },
-                request_only=True
-            )
-        ]
-    )
+    @schemas.VERIFY_CODE_SCHEMA
     def post(self, request):
         serializer = VerifyCodeSerializer(data=request.data)
-
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        user = serializer.validated_data['user']
+        serializer.is_valid(raise_exception=True)
         
-        # Обновляем состояние пользователя после успешной проверки кода
+        user = serializer.validated_data['user']
         user.reset_code_attempts()
         user.is_verified = True
         user.last_login = timezone.now()
         user.save(update_fields=['is_verified', 'last_login', 'code_attempts'])
 
         refresh = RefreshToken.for_user(user)
-
         return Response({
             'refresh': str(refresh),
             'access': str(refresh.access_token),
@@ -259,515 +88,145 @@ class VerifyCodeView(APIView):
         })
 
 
-class ProfileView(APIView):
-    """Работа с профилем пользователя"""
-    permission_classes = [permissions.IsAuthenticated]
+class RefreshTokenView(APIView):
+    """Обновление access token"""
+    permission_classes = [permissions.AllowAny]
 
-    def get(self, request):
-        """Получить данные текущего пользователя"""
-        serializer = UserSerializer(request.user)
-        return Response(serializer.data)
-
-
-@extend_schema(
-    tags=['Аутентификация'],
-)
-class LogoutView(APIView):
-    """'Выход из системы"""
-    permission_classes = [permissions.IsAuthenticated]
-
+    @schemas.REFRESH_TOKEN_SCHEMA
     def post(self, request):
-        # Удаляем токен
-        RefreshToken.for_user(request.user).blacklist()
+        refresh_token = request.data.get('refresh')
+        if not refresh_token:
+            return Response({'detail': 'Refresh token is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response({
-            'detail': 'Выход выполнен успешно'
-        })
+        try:
+            refresh = RefreshToken(refresh_token)
+            new_refresh = RefreshToken.for_user(refresh.user)
+            return Response({
+                'refresh': str(new_refresh),
+                'access': str(new_refresh.access_token),
+                'access_expires': new_refresh.access_token.payload['exp'],
+                'refresh_expires': new_refresh.payload['exp']
+            })
+        except (TokenError, Exception) as e:
+            return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
 
-@extend_schema_view(
-    list=extend_schema(
-        summary='Получить список питомцев',
-        description='Возвращает список всех питомцев текущего пользователя',
-        tags=['pets'],
-        responses={
-            200: PetSerializer(many=True),
-            401: OpenApiTypes.OBJECT,
-        }
-    ),
-    create=extend_schema(
-        summary='Создать нового питомца',
-        description='Создание нового питомца с привязкой к текущему пользователю',
-        tags=['pets'],
-        request=PetCreateSerializer,
-        responses={
-            201: PetSerializer,
-            400: OpenApiTypes.OBJECT,
-            401: OpenApiTypes.OBJECT,
-        },
-        examples=[
-            OpenApiExample(
-                'Успешное создание',
-                value={
-                    'id': 1,
-                    'owner': 'username',
-                    'owner_id': 1,
-                    'name': 'Барсик',
-                    'pet_type': 'cat',
-                    'pet_type_display': 'Кошка',
-                    'breed': 'Сиамская',
-                    'weight': '4.50',
-                    'birthday': '2024-01-15',
-                    'color': 'Красный',
-                    'image': None,
-                    'image_url': None,
-                    'created_at': '2024-01-15T10:30:00Z',
-                    'updated_at': '2024-01-15T10:30:00Z'
-                },
-                response_only=True,
-                status_codes=['201'],
-            ),
-        ]
-    ),
-    retrieve=extend_schema(
-        summary='Получить информацию о питомце',
-        description='Получение детальной информации о конкретном питомце',
-        tags=['pets'],
-        parameters=[
-            OpenApiParameter(
-                name='id',
-                type=OpenApiTypes.INT,
-                location=OpenApiParameter.PATH,
-                description='ID питомца'
-            ),
-        ],
-        responses={
-            200: PetSerializer,
-            404: OpenApiTypes.OBJECT,
-        }
-    ),
-    update=extend_schema(
-        summary='Обновить информацию о питомце',
-        description='Полное обновление информации о питомце',
-        tags=['pets'],
-        request=PetCreateSerializer,
-        responses={
-            200: PetSerializer,
-            400: OpenApiTypes.OBJECT,
-            404: OpenApiTypes.OBJECT,
-        }
-    ),
-    partial_update=extend_schema(
-        summary='Частично обновить информацию о питомце',
-        description='Частичное обновление информации о питомце',
-        tags=['pets'],
-        request=PetCreateSerializer,
-        responses={
-            200: PetSerializer,
-            400: OpenApiTypes.OBJECT,
-            404: OpenApiTypes.OBJECT,
-        }
-    ),
-    destroy=extend_schema(
-        summary='Удалить питомца',
-        description='Удаление питомца по ID',
-        tags=['pets'],
-        responses={
-            204: None,
-            404: OpenApiTypes.OBJECT,
-        }
-    ),
-)
+
+class LogoutView(APIView):
+    """Выход из системы"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @schemas.LOGOUT_SCHEMA
+    def post(self, request):
+        try:
+            RefreshToken.for_user(request.user).blacklist()
+        except Exception:
+            pass
+        return Response({'detail': 'Выход выполнен успешно'})
+
+
+# --- Profile & Pets ---
+
+class ProfileView(generics.RetrieveAPIView):
+    """Профиль текущего пользователя"""
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = UserSerializer
+
+    def get_object(self):
+        return self.request.user
+
+
+@extend_schema_view(**schemas.PET_VIEWSET_SCHEMAS)
 class PetViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet для управления питомцами.
-    """
+    """Управление питомцами"""
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        """Пользователь видит только своих питомцев"""
         return Pet.objects.filter(owner=self.request.user).select_related('breed')
 
     def get_serializer_class(self):
-        """Выбираем сериализатор в зависимости от действия"""
         if self.action in ['create', 'update', 'partial_update']:
             return PetCreateSerializer
         return PetSerializer
 
     def perform_create(self, serializer):
-        """Автоматически устанавливаем владельца при создании"""
         serializer.save(owner=self.request.user)
 
     def create(self, request, *args, **kwargs):
-        """Кастомный обработчик создания"""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
-
-        # Возвращаем полные данные созданного питомца
-        pet = serializer.instance
-        full_serializer = PetSerializer(
-            pet,
-            context={'request': request}
-        )
-
-        return Response(
-            full_serializer.data,
-            status=status.HTTP_201_CREATED
-        )
-
-    @action(detail=False, methods=['get'])
-    def my_pets(self, request):
-        """Получение питомцев текущего пользователя (альтернатива)"""
-        pets = self.get_queryset()
-        serializer = self.get_serializer(pets, many=True)
-        return Response({
-            'count': len(serializer.data),
-            'results': serializer.data
-        })
+        
+        # Возвращаем полные данные через PetSerializer
+        full_data = PetSerializer(serializer.instance, context={'request': request}).data
+        return Response(full_data, status=status.HTTP_201_CREATED)
 
 
-@extend_schema(
-    tags=['Аутентификация'],
-    summary='Обновление токенов доступа',
-    description="""
-    Обновление access token с помощью refresh token.
+class BreedListAPIView(generics.ListAPIView):
+    """Список пород по типу животного"""
+    serializer_class = BreedSerializer
+    pagination_class = None
 
-    **Важно:**
-    - Refresh token действителен 7 дней
-    - Access token действителен 60 минут
-    - При каждом обновлении выдается новый refresh token (ротация токенов)
-    - Старый refresh token становится недействительным
-    """,
-    request=RefreshTokenSerializer,
-    responses={
-        200: OpenApiResponse(
-            response=TokenResponseSerializer,
-            description='Токены успешно обновлены',
-            examples=[
-                OpenApiExample(
-                    'Успешное обновление токенов',
-                    value={
-                        'refresh': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
-                        'access': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
-                        'access_expires': 1700000000,
-                        'refresh_expires': 1700604800
-                    }
-                )
-            ]
-        ),
-        400: OpenApiResponse(
-            response=ErrorResponseSerializer,
-            description='Отсутствует refresh token',
-            examples=[
-                OpenApiExample(
-                    'Отсутствует refresh token',
-                    value={
-                        'detail': 'Refresh token is required'
-                    }
-                )
-            ]
-        ),
-        401: OpenApiResponse(
-            response=ErrorResponseSerializer,
-            description='Неверный или просроченный refresh token',
-            examples=[
-                OpenApiExample(
-                    'Неверный токен',
-                    value={
-                        'detail': 'Token is invalid or expired'
-                    }
-                ),
-                OpenApiExample(
-                    'Просроченный токен',
-                    value={
-                        'detail': 'Token has expired'
-                    }
-                )
-            ]
-        )
-    },
-    examples=[
-        OpenApiExample(
-            'Запрос на обновление токена',
-            value={'refresh': 'your_refresh_token_here'},
-            request_only=True
-        )
-    ]
-)
-class RefreshTokenView(APIView):
-    permission_classes = [permissions.AllowAny]
+    @schemas.BREED_LIST_SCHEMA
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
 
-    def post(self, request):
-        refresh_token = request.data.get('refresh')
-
-        if not refresh_token:
-            return Response(
-                {'detail': 'Refresh token is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-            refresh = RefreshToken(refresh_token)
-
-            # Создаем новые токены
-            new_refresh = RefreshToken.for_user(refresh.user)
-            new_access_token = new_refresh.access_token
-
-            # Добавляем старый токен в blacklist (если настроен)
-            # refresh.blacklist()
-
-            return Response({
-                'refresh': str(new_refresh),
-                'access': str(new_access_token),
-                'access_expires': new_access_token.payload['exp'],
-                'refresh_expires': new_refresh.payload['exp']
-            })
-
-        except TokenError as e:
-            return Response(
-                {'detail': str(e)},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
-        except Exception:
-            return Response(
-                {'detail': 'Invalid token'},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
-
-
-class BreedListAPIView(APIView):
-    """
-    Получение списка пород по типу животного
-    """
-
-    @extend_schema(
-        summary='Список пород по типу животного',
-        description=(
-            'Возвращает список пород животных.\n\n'
-            '**Параметр `type` обязателен**:\n'
-            '- `dog` — породы собак\n'
-            '- `cat` — породы кошек'
-        ),
-        parameters=[
-            OpenApiParameter(
-                name='type',
-                description='Тип животного',
-                required=True,
-                type=OpenApiTypes.STR,
-                enum=[PetType.DOG, PetType.CAT],
-                location=OpenApiParameter.QUERY,
-            )
-        ],
-        responses={200: BreedSerializer(many=True)},
-        tags=['Breeds'],
-    )
-    def get(self, request):
-        pet_type = request.query_params.get('type')
-
+    def get_queryset(self):
+        pet_type = self.request.query_params.get('type')
         if pet_type not in PetType.values:
-            return Response(
-                {
-                    'detail': 'Параметр "type" обязателен и должен быть "dog" или "cat"'
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        breeds = Breed.objects.filter(type=pet_type)
-        serializer = BreedSerializer(breeds, many=True)
-
-        return Response(serializer.data, status=status.HTTP_200_OK)
+            raise ValidationError({'detail': "Параметр 'type' обязателен ('dog' или 'cat')"})
+        return Breed.objects.filter(type=pet_type)
 
 
-@extend_schema_view(
-    create=extend_schema(
-        summary='Создать событие',
-        description='Создает одноразовое или повторяющееся событие',
-        request=EventSerializer,
-        responses={
-            201: EventSerializer,
-        },
-        examples=[
-            OpenApiExample(
-                name='Recurring weekly example',
-                value={
-                    'pet': 'uuid',
-                    'title': 'Дать таблетку',
-                    'description': 'После еды',
-                    'start_date': '2026-02-20',
-                    'time': '17:00',
-                    'timezone_offset': 60,
-                    'is_recurring': True,
-                    'recurrence': {
-                        'frequency': 'weekly',
-                        'interval': 1,
-                        'week_days': [1, 4]
-                    }
-                },
-                request_only=True,
-            )
-        ],
-    ),
-)
+# --- Events ---
+
+@extend_schema_view(**schemas.EVENT_VIEWSET_SCHEMAS)
 class EventViewSet(viewsets.ModelViewSet):
+    """Управление событиями"""
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = EventSerializer
 
     def get_queryset(self):
-        pet_id = self.request.GET.get('pet_id', None)
-
-        queryset= (
-            Event.objects
-            .filter(user=self.request.user)
-            .select_related('recurrence')
-        )
-
+        pet_id = self.request.query_params.get('pet_id')
+        queryset = Event.objects.filter(user=self.request.user).select_related('recurrence')
         if pet_id:
             queryset = queryset.filter(pet_id=pet_id)
-
         return queryset
 
-    @extend_schema(exclude=True)
     def list(self, request, *args, **kwargs):
-        raise MethodNotAllowed('GET')
+        raise MethodNotAllowed('GET', detail='Используйте /events/period/ для получения списка')
 
-    @extend_schema(
-        summary='Получить события за период',
-        description=(
-            'Возвращает список всех событий (включая повторяющиеся) в выбранном диапазоне дат. '
-            'Формат элементов ответа совпадает с /event_schedule/{id}/ (EventSerializer); '
-            'для повторяющихся событий поле start_date равно конкретной дате occurrence в диапазоне.'
-        ),
-        parameters=[
-            OpenApiParameter(
-                name='date_from',
-                type=OpenApiTypes.DATE,
-                location=OpenApiParameter.QUERY,
-                required=True,
-            ),
-            OpenApiParameter(
-                name='date_to',
-                type=OpenApiTypes.DATE,
-                location=OpenApiParameter.QUERY,
-                required=True,
-            ),
-            OpenApiParameter(
-                name='pet_id',
-                type=OpenApiTypes.INT,
-                location=OpenApiParameter.QUERY,
-                required=False,
-            ),
-        ],
-        responses={200: EventSerializer(many=True)},
-    )
     @action(detail=False, methods=['get'])
     def period(self, request):
+        """События за период (с учетом повторений)"""
         date_from = parse_date(request.query_params.get('date_from'))
         date_to = parse_date(request.query_params.get('date_to'))
 
         if not date_from or not date_to:
-            return Response(
-                {'detail': 'date_from and date_to are required'},
-                status=400,
-            )
+            return Response({'detail': 'date_from and date_to are required'}, status=400)
 
         events = self.get_queryset()
         result = []
 
         for event in events:
-            dates = generate_occurrences(event, date_from, date_to)
-
-            for d in dates:
-                serializer = self.get_serializer(
-                    event,
-                    context={
-                        'request': request,
-                        'occurrence_date': d,
-                    },
-                )
+            for d in generate_occurrences(event, date_from, date_to):
+                serializer = self.get_serializer(event, context={'request': request, 'occurrence_date': d})
                 data = dict(serializer.data)
-
-                data['start_date'] = d.isoformat()
-                data['timezone_offset'] = event.timezone_offset
-                data['time'] = shift_time_by_minutes(
-                    event.time,
-                    -event.timezone_offset,
-                ).isoformat()
-
+                data.update({
+                    'start_date': d.isoformat(),
+                    'time': shift_time_by_minutes(event.time, -event.timezone_offset).isoformat()
+                })
                 result.append(data)
 
-        result.sort(key=lambda item: (item['start_date'], item.get('time') or ''))
+        result.sort(key=lambda x: (x['start_date'], x.get('time', '')))
         return Response(result)
 
-    @extend_schema(
-        summary='Отметить событие выполненным',
-        description=(
-            'Отмечает конкретный occurrence события как выполненный.\n\n'
-            '**Важно:**\n'
-            '- Для одноразового события передавайте его start_date\n'
-            '- Для повторяющегося — дату конкретного occurrence\n'
-            '- Повторный вызов безопасен (idempotent)\n'
-        ),
-        request=OpenApiTypes.OBJECT,
-        responses={
-            200: OpenApiResponse(
-                response=OpenApiTypes.OBJECT,
-                description='Событие успешно отмечено выполненным',
-                examples=[
-                    OpenApiExample(
-                        name='Success',
-                        value={
-                            'done': True
-                        }
-                    )
-                ],
-            ),
-            400: OpenApiResponse(
-                response=OpenApiTypes.OBJECT,
-                description='Некорректный запрос',
-                examples=[
-                    OpenApiExample(
-                        name='Missing date',
-                        value={
-                            'detail': 'date is required'
-                        }
-                    )
-                ],
-            ),
-            404: OpenApiResponse(
-                response=OpenApiTypes.OBJECT,
-                description='Событие не найдено',
-            ),
-        },
-        examples=[
-            OpenApiExample(
-                name='Mark occurrence done',
-                request_only=True,
-                value={
-                    'date': '2026-02-20'
-                },
-            )
-        ],
-        tags=['events'],
-    )
     @action(detail=True, methods=['post'])
     def mark_done(self, request, pk=None):
-        """
-        Отметить occurrence как выполненное.
-        """
+        """Отметить событие выполненным на дату"""
         event = self.get_object()
-        occurrence_date = request.data.get('date')
-
+        occurrence_date = parse_date(request.data.get('date'))
         if not occurrence_date:
-            return Response(
-                {'detail': 'date is required'},
-                status=400,
-            )
+            return Response({'detail': 'date is required'}, status=400)
 
-        occurrence_date = parse_date(occurrence_date)
-
-        _, _ = EventCompletion.objects.get_or_create(
-            event=event,
-            occurrence_date=occurrence_date,
-        )
-
+        EventCompletion.objects.get_or_create(event=event, occurrence_date=occurrence_date)
         return Response({'done': True})
