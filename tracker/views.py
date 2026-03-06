@@ -30,22 +30,22 @@ logger = logging.getLogger(__name__)
 
 class SendCodeView(APIView):
     """
-        Отправка кода подтверждения на номер телефона
+    Отправка кода подтверждения на номер телефона
 
-        Пользователь вводит номер → отправляем код → ждем подтверждения
+    Пользователь вводит номер → отправляем код → ждем подтверждения
 
-        **Логика работы:**
-        1. Проверяет, не отправлялся ли код в последнюю минуту
-        2. Генерирует 4-значный код
-        3. Создает/обновляет пользователя с кодом
-        4. Отправляет код через SMS (в продакшене)
-        5. Устанавливает таймаут для повторной отправки
-        """
+    **Логика работы:**
+    1. Проверяет, не отправлялся ли код в последнюю минуту
+    2. Генерирует 4-значный код
+    3. Создает/обновляет пользователя с кодом
+    4. Отправляет код через SMS (в продакшене)
+    5. Устанавливает таймаут для повторной отправки
+    """
     permission_classes = [permissions.AllowAny]
 
     @extend_schema(
-        tags=["Аутентификация"],
-        summary="Отправка кода подтверждения",
+        tags=['Аутентификация'],
+        summary='Отправка кода подтверждения',
         description="""
             Отправляет SMS с кодом подтверждения на указанный номер телефона.
 
@@ -58,27 +58,27 @@ class SendCodeView(APIView):
         responses={
             200: OpenApiResponse(
                 response=OpenApiTypes.OBJECT,
-                description="Код успешно отправлен",
+                description='Код успешно отправлен',
                 examples=[
                     OpenApiExample(
-                        "Успешная отправка",
+                        'Успешная отправка',
                         value={
-                            "detail": "Код подтверждения отправлен",
-                            "phone_number": "+79991234567",
-                            "resend_timeout": 60
+                            'detail': 'Код подтверждения отправлен',
+                            'phone_number': '+79991234567',
+                            'resend_timeout': 60
                         }
                     )
                 ]
             ),
             400: OpenApiResponse(
                 response=OpenApiTypes.OBJECT,
-                description="Неверный формат номера телефона",
+                description='Неверный формат номера телефона',
                 examples=[
                     OpenApiExample(
-                        "Ошибка валидации",
+                        'Ошибка валидации',
                         value={
-                            "phone_number": [
-                                "Введите корректный номер телефона."
+                            'phone_number': [
+                                'Введите корректный номер телефона.'
                             ]
                         }
                     )
@@ -86,12 +86,12 @@ class SendCodeView(APIView):
             ),
             429: OpenApiResponse(
                 response=OpenApiTypes.OBJECT,
-                description="Слишком много запросов",
+                description='Слишком много запросов',
                 examples=[
                     OpenApiExample(
-                        "Повторная отправка",
+                        'Повторная отправка',
                         value={
-                            "error": "Код уже отправлен. Попробуйте через 1 минуту."
+                            'error': 'Код уже отправлен. Попробуйте через 1 минуту.'
                         }
                     )
                 ]
@@ -99,8 +99,8 @@ class SendCodeView(APIView):
         },
         examples=[
             OpenApiExample(
-                "Пример запроса",
-                value={"phone_number": "+79991234567"},
+                'Пример запроса',
+                value={'phone_number': '+79991234567'},
                 request_only=True
             )
         ]
@@ -111,10 +111,10 @@ class SendCodeView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         phone_number = serializer.validated_data['phone_number']
 
-        cache_key = f"code_sent_{phone_number}"
+        cache_key = f'code_sent_{phone_number}'
         if cache.get(cache_key):
             return Response({
-                "error": "Код уже отправлен. Попробуйте через 1 минуту."
+                'error': 'Код уже отправлен. Попробуйте через 1 минуту.'
             }, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         code = str(random.randint(1000, 9999))
@@ -138,14 +138,14 @@ class SendCodeView(APIView):
         if not settings.DEBUG:
             send_confirmation_code.delay(phone_number, code)
 
-        logger.info(f"Код {code} отправлен на номер {phone_number}")
+        logger.info(f'Код {code} отправлен на номер {phone_number}')
 
         cache.set(cache_key, True, timeout=60)
 
         return Response({
-            "detail": "Код подтверждения отправлен",
-            "phone_number": phone_number,
-            "resend_timeout": 60
+            'detail': 'Код подтверждения отправлен',
+            'phone_number': phone_number,
+            'resend_timeout': 60
         }, status=status.HTTP_200_OK)
 
 
@@ -165,8 +165,8 @@ class VerifyCodeView(APIView):
     permission_classes = [permissions.AllowAny]
 
     @extend_schema(
-        tags=["Аутентификация"],
-        summary="Подтверждение кода",
+        tags=['Аутентификация'],
+        summary='Подтверждение кода',
         description="""
         Проверяет код подтверждения и возвращает JWT токены для аутентификации.
         
@@ -180,45 +180,45 @@ class VerifyCodeView(APIView):
         responses={
             200: OpenApiResponse(
                 response=OpenApiTypes.OBJECT,
-                description="Код подтвержден, токены получены",
+                description='Код подтвержден, токены получены',
                 examples=[
                     OpenApiExample(
-                        "Успешная аутентификация",
+                        'Успешная аутентификация',
                         value={
-                            "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-                            "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-                            "access_expires": 1736000000,
-                            "refresh_expires": 1736000000
+                            'refresh': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
+                            'access': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
+                            'access_expires': 1736000000,
+                            'refresh_expires': 1736000000
                         }
                     )
                 ]
             ),
             400: OpenApiResponse(
                 response=OpenApiTypes.OBJECT,
-                description="Неверный код или номер",
+                description='Неверный код или номер',
                 examples=[
                     OpenApiExample(
-                        "Неверный код",
+                        'Неверный код',
                         value={
-                            "code": ["Неверный код подтверждения."]
+                            'code': ['Неверный код подтверждения.']
                         }
                     ),
                     OpenApiExample(
-                        "Истек срок действия",
+                        'Истек срок действия',
                         value={
-                            "non_field_errors": ["Срок действия кода истек."]
+                            'non_field_errors': ['Срок действия кода истек.']
                         }
                     )
                 ]
             ),
             403: OpenApiResponse(
                 response=OpenApiTypes.OBJECT,
-                description="Аккаунт заблокирован",
+                description='Аккаунт заблокирован',
                 examples=[
                     OpenApiExample(
-                        "Превышены попытки",
+                        'Превышены попытки',
                         value={
-                            "error": "Аккаунт заблокирован. Попробуйте через 15 минут."
+                            'error': 'Аккаунт заблокирован. Попробуйте через 15 минут.'
                         }
                     )
                 ]
@@ -226,10 +226,10 @@ class VerifyCodeView(APIView):
         },
         examples=[
             OpenApiExample(
-                "Пример запроса",
+                'Пример запроса',
                 value={
-                    "phone_number": "+79991234567",
-                    "code": "1234"
+                    'phone_number': '+79991234567',
+                    'code': '1234'
                 },
                 request_only=True
             )
@@ -252,10 +252,10 @@ class VerifyCodeView(APIView):
         refresh = RefreshToken.for_user(user)
 
         return Response({
-            "refresh": str(refresh),
-            "access": str(refresh.access_token),
-            "access_expires": refresh.access_token.payload['exp'],
-            "refresh_expires": refresh.payload['exp']
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+            'access_expires': refresh.access_token.payload['exp'],
+            'refresh_expires': refresh.payload['exp']
         })
 
 
@@ -270,10 +270,10 @@ class ProfileView(APIView):
 
 
 @extend_schema(
-    tags=["Аутентификация"],
+    tags=['Аутентификация'],
 )
 class LogoutView(APIView):
-    """Выход из системы"""
+    """'Выход из системы"""
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -281,7 +281,7 @@ class LogoutView(APIView):
         RefreshToken.for_user(request.user).blacklist()
 
         return Response({
-            "detail": "Выход выполнен успешно"
+            'detail': 'Выход выполнен успешно'
         })
 
 @extend_schema_view(
@@ -308,21 +308,20 @@ class LogoutView(APIView):
             OpenApiExample(
                 'Успешное создание',
                 value={
-                    "id": 1,
-                    "owner": "username",
-                    "owner_id": 1,
-                    "name": "Барсик",
-                    "pet_type": "cat",
-                    "pet_type_display": "Кошка",
-                    "breed": "Сиамская",
-                    "weight": "4.50",
-                    "birthday": '2024-01-15',
-                    "color":
-                        """Наварил деревенского самогона Наварил деревенского самогона Наварил деревенского самогона (Э-э-у-у) Браги два бидона""",
-                    "image": None,
-                    "image_url": None,
-                    "created_at": "2024-01-15T10:30:00Z",
-                    "updated_at": "2024-01-15T10:30:00Z"
+                    'id': 1,
+                    'owner': 'username',
+                    'owner_id': 1,
+                    'name': 'Барсик',
+                    'pet_type': 'cat',
+                    'pet_type_display': 'Кошка',
+                    'breed': 'Сиамская',
+                    'weight': '4.50',
+                    'birthday': '2024-01-15',
+                    'color': 'Красный',
+                    'image': None,
+                    'image_url': None,
+                    'created_at': '2024-01-15T10:30:00Z',
+                    'updated_at': '2024-01-15T10:30:00Z'
                 },
                 response_only=True,
                 status_codes=['201'],
@@ -428,8 +427,8 @@ class PetViewSet(viewsets.ModelViewSet):
 
 
 @extend_schema(
-    tags=["Аутентификация"],
-    summary="Обновление токенов доступа",
+    tags=['Аутентификация'],
+    summary='Обновление токенов доступа',
     description="""
     Обновление access token с помощью refresh token.
 
@@ -443,45 +442,45 @@ class PetViewSet(viewsets.ModelViewSet):
     responses={
         200: OpenApiResponse(
             response=TokenResponseSerializer,
-            description="Токены успешно обновлены",
+            description='Токены успешно обновлены',
             examples=[
                 OpenApiExample(
-                    "Успешное обновление токенов",
+                    'Успешное обновление токенов',
                     value={
-                        "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-                        "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-                        "access_expires": 1700000000,
-                        "refresh_expires": 1700604800
+                        'refresh': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
+                        'access': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
+                        'access_expires': 1700000000,
+                        'refresh_expires': 1700604800
                     }
                 )
             ]
         ),
         400: OpenApiResponse(
             response=ErrorResponseSerializer,
-            description="Отсутствует refresh token",
+            description='Отсутствует refresh token',
             examples=[
                 OpenApiExample(
-                    "Отсутствует refresh token",
+                    'Отсутствует refresh token',
                     value={
-                        "detail": "Refresh token is required"
+                        'detail': 'Refresh token is required'
                     }
                 )
             ]
         ),
         401: OpenApiResponse(
             response=ErrorResponseSerializer,
-            description="Неверный или просроченный refresh token",
+            description='Неверный или просроченный refresh token',
             examples=[
                 OpenApiExample(
-                    "Неверный токен",
+                    'Неверный токен',
                     value={
-                        "detail": "Token is invalid or expired"
+                        'detail': 'Token is invalid or expired'
                     }
                 ),
                 OpenApiExample(
-                    "Просроченный токен",
+                    'Просроченный токен',
                     value={
-                        "detail": "Token has expired"
+                        'detail': 'Token has expired'
                     }
                 )
             ]
@@ -489,8 +488,8 @@ class PetViewSet(viewsets.ModelViewSet):
     },
     examples=[
         OpenApiExample(
-            "Запрос на обновление токена",
-            value={"refresh": "your_refresh_token_here"},
+            'Запрос на обновление токена',
+            value={'refresh': 'your_refresh_token_here'},
             request_only=True
         )
     ]
@@ -503,7 +502,7 @@ class RefreshTokenView(APIView):
 
         if not refresh_token:
             return Response(
-                {"detail": "Refresh token is required"},
+                {'detail': 'Refresh token is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -518,20 +517,20 @@ class RefreshTokenView(APIView):
             # refresh.blacklist()
 
             return Response({
-                "refresh": str(new_refresh),
-                "access": str(new_access_token),
-                "access_expires": new_access_token.payload['exp'],
-                "refresh_expires": new_refresh.payload['exp']
+                'refresh': str(new_refresh),
+                'access': str(new_access_token),
+                'access_expires': new_access_token.payload['exp'],
+                'refresh_expires': new_refresh.payload['exp']
             })
 
         except TokenError as e:
             return Response(
-                {"detail": str(e)},
+                {'detail': str(e)},
                 status=status.HTTP_401_UNAUTHORIZED
             )
         except Exception:
             return Response(
-                {"detail": "Invalid token"},
+                {'detail': 'Invalid token'},
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
@@ -542,17 +541,17 @@ class BreedListAPIView(APIView):
     """
 
     @extend_schema(
-        summary="Список пород по типу животного",
+        summary='Список пород по типу животного',
         description=(
-            "Возвращает список пород животных.\n\n"
-            "**Параметр `type` обязателен**:\n"
-            "- `dog` — породы собак\n"
-            "- `cat` — породы кошек"
+            'Возвращает список пород животных.\n\n'
+            '**Параметр `type` обязателен**:\n'
+            '- `dog` — породы собак\n'
+            '- `cat` — породы кошек'
         ),
         parameters=[
             OpenApiParameter(
-                name="type",
-                description="Тип животного",
+                name='type',
+                description='Тип животного',
                 required=True,
                 type=OpenApiTypes.STR,
                 enum=[PetType.DOG, PetType.CAT],
@@ -560,15 +559,15 @@ class BreedListAPIView(APIView):
             )
         ],
         responses={200: BreedSerializer(many=True)},
-        tags=["Breeds"],
+        tags=['Breeds'],
     )
     def get(self, request):
-        pet_type = request.query_params.get("type")
+        pet_type = request.query_params.get('type')
 
         if pet_type not in PetType.values:
             return Response(
                 {
-                    "detail": "Параметр 'type' обязателен и должен быть 'dog' или 'cat'"
+                    'detail': 'Параметр "type" обязателен и должен быть "dog" или "cat"'
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -581,27 +580,27 @@ class BreedListAPIView(APIView):
 
 @extend_schema_view(
     create=extend_schema(
-        summary="Создать событие",
-        description="Создает одноразовое или повторяющееся событие",
+        summary='Создать событие',
+        description='Создает одноразовое или повторяющееся событие',
         request=EventSerializer,
         responses={
             201: EventSerializer,
         },
         examples=[
             OpenApiExample(
-                name="Recurring weekly example",
+                name='Recurring weekly example',
                 value={
-                    "pet": "uuid",
-                    "title": "Дать таблетку",
-                    "description": "После еды",
-                    "start_date": "2026-02-20",
-                    "time": "17:00",
-                    "timezone_offset": 60,
-                    "is_recurring": True,
-                    "recurrence": {
-                        "frequency": "weekly",
-                        "interval": 1,
-                        "week_days": [1, 4]
+                    'pet': 'uuid',
+                    'title': 'Дать таблетку',
+                    'description': 'После еды',
+                    'start_date': '2026-02-20',
+                    'time': '17:00',
+                    'timezone_offset': 60,
+                    'is_recurring': True,
+                    'recurrence': {
+                        'frequency': 'weekly',
+                        'interval': 1,
+                        'week_days': [1, 4]
                     }
                 },
                 request_only=True,
@@ -619,7 +618,7 @@ class EventViewSet(viewsets.ModelViewSet):
         queryset= (
             Event.objects
             .filter(user=self.request.user)
-            .select_related("recurrence")
+            .select_related('recurrence')
         )
 
         if pet_id:
@@ -632,27 +631,27 @@ class EventViewSet(viewsets.ModelViewSet):
         raise MethodNotAllowed('GET')
 
     @extend_schema(
-        summary="Получить события за период",
+        summary='Получить события за период',
         description=(
-            "Возвращает список всех событий (включая повторяющиеся) в выбранном диапазоне дат. "
-            "Формат элементов ответа совпадает с /event_schedule/{id}/ (EventSerializer); "
-            "для повторяющихся событий поле start_date равно конкретной дате occurrence в диапазоне."
+            'Возвращает список всех событий (включая повторяющиеся) в выбранном диапазоне дат. '
+            'Формат элементов ответа совпадает с /event_schedule/{id}/ (EventSerializer); '
+            'для повторяющихся событий поле start_date равно конкретной дате occurrence в диапазоне.'
         ),
         parameters=[
             OpenApiParameter(
-                name="date_from",
+                name='date_from',
                 type=OpenApiTypes.DATE,
                 location=OpenApiParameter.QUERY,
                 required=True,
             ),
             OpenApiParameter(
-                name="date_to",
+                name='date_to',
                 type=OpenApiTypes.DATE,
                 location=OpenApiParameter.QUERY,
                 required=True,
             ),
             OpenApiParameter(
-                name="pet_id",
+                name='pet_id',
                 type=OpenApiTypes.INT,
                 location=OpenApiParameter.QUERY,
                 required=False,
@@ -660,14 +659,14 @@ class EventViewSet(viewsets.ModelViewSet):
         ],
         responses={200: EventSerializer(many=True)},
     )
-    @action(detail=False, methods=["get"])
+    @action(detail=False, methods=['get'])
     def period(self, request):
         date_from = parse_date(request.query_params.get('date_from'))
         date_to = parse_date(request.query_params.get('date_to'))
 
         if not date_from or not date_to:
             return Response(
-                {"detail": "date_from and date_to are required"},
+                {'detail': 'date_from and date_to are required'},
                 status=400,
             )
 
@@ -681,94 +680,94 @@ class EventViewSet(viewsets.ModelViewSet):
                 serializer = self.get_serializer(
                     event,
                     context={
-                        "request": request,
-                        "occurrence_date": d,
+                        'request': request,
+                        'occurrence_date': d,
                     },
                 )
                 data = dict(serializer.data)
 
-                data["start_date"] = d.isoformat()
-                data["timezone_offset"] = event.timezone_offset
-                data["time"] = shift_time_by_minutes(
+                data['start_date'] = d.isoformat()
+                data['timezone_offset'] = event.timezone_offset
+                data['time'] = shift_time_by_minutes(
                     event.time,
                     -event.timezone_offset,
                 ).isoformat()
 
                 result.append(data)
 
-        result.sort(key=lambda item: (item["start_date"], item.get("time") or ""))
+        result.sort(key=lambda item: (item['start_date'], item.get('time') or ''))
         return Response(result)
 
     @extend_schema(
-        summary="Отметить событие выполненным",
+        summary='Отметить событие выполненным',
         description=(
-                "Отмечает конкретный occurrence события как выполненный.\n\n"
-                "**Важно:**\n"
-                "- Для одноразового события передавайте его start_date\n"
-                "- Для повторяющегося — дату конкретного occurrence\n"
-                "- Повторный вызов безопасен (idempotent)\n"
+            'Отмечает конкретный occurrence события как выполненный.\n\n'
+            '**Важно:**\n'
+            '- Для одноразового события передавайте его start_date\n'
+            '- Для повторяющегося — дату конкретного occurrence\n'
+            '- Повторный вызов безопасен (idempotent)\n'
         ),
         request=OpenApiTypes.OBJECT,
         responses={
             200: OpenApiResponse(
                 response=OpenApiTypes.OBJECT,
-                description="Событие успешно отмечено выполненным",
+                description='Событие успешно отмечено выполненным',
                 examples=[
                     OpenApiExample(
-                        name="Success",
+                        name='Success',
                         value={
-                            "done": True
+                            'done': True
                         }
                     )
                 ],
             ),
             400: OpenApiResponse(
                 response=OpenApiTypes.OBJECT,
-                description="Некорректный запрос",
+                description='Некорректный запрос',
                 examples=[
                     OpenApiExample(
-                        name="Missing date",
+                        name='Missing date',
                         value={
-                            "detail": "date is required"
+                            'detail': 'date is required'
                         }
                     )
                 ],
             ),
             404: OpenApiResponse(
                 response=OpenApiTypes.OBJECT,
-                description="Событие не найдено",
+                description='Событие не найдено',
             ),
         },
         examples=[
             OpenApiExample(
-                name="Mark occurrence done",
+                name='Mark occurrence done',
                 request_only=True,
                 value={
-                    "date": "2026-02-20"
+                    'date': '2026-02-20'
                 },
             )
         ],
-        tags=["events"],
+        tags=['events'],
     )
-    @action(detail=True, methods=["post"])
+    @action(detail=True, methods=['post'])
     def mark_done(self, request, pk=None):
         """
         Отметить occurrence как выполненное.
         """
         event = self.get_object()
-        occurrence_date = request.data.get("date")
+        occurrence_date = request.data.get('date')
 
         if not occurrence_date:
             return Response(
-                {"detail": "date is required"},
+                {'detail': 'date is required'},
                 status=400,
             )
 
         occurrence_date = parse_date(occurrence_date)
 
-        obj, created = EventCompletion.objects.get_or_create(
+        _, _ = EventCompletion.objects.get_or_create(
             event=event,
             occurrence_date=occurrence_date,
         )
 
-        return Response({"done": True})
+        return Response({'done': True})

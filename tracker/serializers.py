@@ -2,7 +2,6 @@ from django.conf import settings
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
-from django.utils import timezone
 from tracker.models import User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
 
 from .utils import normalize_phone, shift_time_by_minutes
@@ -22,7 +21,7 @@ class PhoneNumberSerializer(serializers.Serializer):
 
         # Проверка на соответствие формату 7XXXXXXXXXX (11 цифр)
         if len(normalized) != 11 or not normalized.startswith('7'):
-            raise serializers.ValidationError("Номер телефона должен быть в формате 7XXXXXXXXXX")
+            raise serializers.ValidationError('Номер телефона должен быть в формате 7XXXXXXXXXX')
             
         return normalized
 
@@ -39,18 +38,18 @@ class VerifyCodeSerializer(serializers.Serializer):
         try:
             user = User.objects.get(phone_number=phone_number)
         except User.DoesNotExist:
-            raise serializers.ValidationError({"phone_number": "Пользователь с таким номером не найден"})
+            raise serializers.ValidationError({'phone_number': 'Пользователь с таким номером не найден'})
 
         # Проверяем, не истек ли код
         if user.is_code_expired:
             raise serializers.ValidationError({
-                "code": "Срок действия кода истек. Запросите новый код."
+                'code': 'Срок действия кода истек. Запросите новый код.'
             })
 
         # Проверяем количество попыток
         if user.code_attempts >= 5:
             raise serializers.ValidationError({
-                "code": "Превышено количество попыток. Запросите новый код."
+                'code': 'Превышено количество попыток. Запросите новый код.'
             })
 
         # Проверяем код
@@ -60,7 +59,7 @@ class VerifyCodeSerializer(serializers.Serializer):
             user.increment_code_attempts()
             attempts_left = 5 - user.code_attempts
             raise serializers.ValidationError({
-                "code": f"Неверный код. Осталось попыток: {max(0, attempts_left)}"
+                'code': f'Неверный код. Осталось попыток: {max(0, attempts_left)}'
             })
 
         # Код верный - сохраняем пользователя в валидированных данных
@@ -87,7 +86,7 @@ class UserSerializer(serializers.ModelSerializer):
 class BreedSerializer(serializers.ModelSerializer):
     class Meta:
         model = Breed
-        fields = ("id", "name", "type")
+        fields = ('id', 'name', 'type')
 
 
 class PetSerializer(serializers.ModelSerializer):
@@ -136,19 +135,19 @@ class PetCreateSerializer(PetSerializer):
 
 
 class TokenResponseSerializer(serializers.Serializer):
-    refresh = serializers.CharField(help_text="Refresh token для получения нового access token")
-    access = serializers.CharField(help_text="Access token для аутентификации запросов")
-    access_expires = serializers.IntegerField(help_text="Время истечения access token (Unix timestamp)")
-    refresh_expires = serializers.IntegerField(help_text="Время истечения refresh token (Unix timestamp)")
+    refresh = serializers.CharField(help_text='Refresh token для получения нового access token')
+    access = serializers.CharField(help_text='Access token для аутентификации запросов')
+    access_expires = serializers.IntegerField(help_text='Время истечения access token (Unix timestamp)')
+    refresh_expires = serializers.IntegerField(help_text='Время истечения refresh token (Unix timestamp)')
 
 
 class ErrorResponseSerializer(serializers.Serializer):
-    detail = serializers.CharField(help_text="Описание ошибки")
-    code = serializers.CharField(required=False, help_text="Код ошибки")
+    detail = serializers.CharField(help_text='Описание ошибки')
+    code = serializers.CharField(required=False, help_text='Код ошибки')
 
 
 class RefreshTokenSerializer(serializers.Serializer):
-    refresh = serializers.CharField(help_text="Refresh token obtained during authentication")
+    refresh = serializers.CharField(help_text='Refresh token obtained during authentication')
 
 
 class RecurrenceRuleSerializer(serializers.ModelSerializer):
@@ -156,21 +155,21 @@ class RecurrenceRuleSerializer(serializers.ModelSerializer):
     class Meta:
         model = RecurrenceRule
         fields = (
-            "frequency",
-            "interval",
-            "week_days",
-            "month_days",
-            "end_date",
+            'frequency',
+            'interval',
+            'week_days',
+            'month_days',
+            'end_date',
         )
 
     def validate(self, data):
-        frequency = data.get("frequency")
+        frequency = data.get('frequency')
 
-        if frequency == RecurrenceFrequency.WEEKLY and not data.get("week_days"):
-            raise serializers.ValidationError("week_days required for weekly recurrence")
+        if frequency == RecurrenceFrequency.WEEKLY and not data.get('week_days'):
+            raise serializers.ValidationError('week_days required for weekly recurrence')
 
-        if frequency == RecurrenceFrequency.MONTHLY and not data.get("month_days"):
-            raise serializers.ValidationError("month_days required for monthly recurrence")
+        if frequency == RecurrenceFrequency.MONTHLY and not data.get('month_days'):
+            raise serializers.ValidationError('month_days required for monthly recurrence')
 
         return data
 
@@ -187,7 +186,7 @@ class EventSerializer(serializers.ModelSerializer):
         """
         Проверяет выполнено ли событие на конкретную дату.
         """
-        occurrence_date = self.context.get("occurrence_date")
+        occurrence_date = self.context.get('occurrence_date')
 
         if occurrence_date is None:
             occurrence_date = obj.start_date
@@ -200,48 +199,48 @@ class EventSerializer(serializers.ModelSerializer):
     class Meta:
         model = Event
         fields = (
-            "id",
-            "pet",
-            "title",
-            "description",
-            "start_date",
-            "time",
-            "timezone_offset",
-            "is_recurring",
-            "recurrence",
+            'id',
+            'pet',
+            'title',
+            'description',
+            'start_date',
+            'time',
+            'timezone_offset',
+            'is_recurring',
+            'recurrence',
             'type',
             'done',
         )
-        read_only_fields = ("id",)
+        read_only_fields = ('id',)
 
     def validate_timezone_offset(self, value):
         # Реалистичный диапазон часовых поясов: [-14:00, +14:00]
         if value < -14 * 60 or value > 14 * 60:
-            raise serializers.ValidationError("timezone_offset out of range.")
+            raise serializers.ValidationError('timezone_offset out of range.')
         return value
 
     def validate(self, data):
         # Клиент присылает time в UTC+0. В базе храним локальное время (UTC + timezone_offset)
-        if self.instance is None and data.get("timezone_offset") is None:
+        if self.instance is None and data.get('timezone_offset') is None:
             raise serializers.ValidationError(
-                {"timezone_offset": "timezone_offset is required (minutes offset relative to UTC)."}
+                {'timezone_offset': 'timezone_offset is required (minutes offset relative to UTC).'}
             )
 
-        effective_offset = data.get("timezone_offset")
+        effective_offset = data.get('timezone_offset')
         if effective_offset is None and self.instance is not None:
             effective_offset = self.instance.timezone_offset
 
-        if effective_offset is not None and "time" in data and data["time"] is not None:
-            data["time"] = shift_time_by_minutes(data["time"], effective_offset)
+        if effective_offset is not None and 'time' in data and data['time'] is not None:
+            data['time'] = shift_time_by_minutes(data['time'], effective_offset)
 
-        is_recurring = data.get("is_recurring", self.instance.is_recurring if self.instance else False)
-        recurrence = data.get("recurrence")
+        is_recurring = data.get('is_recurring', self.instance.is_recurring if self.instance else False)
+        recurrence = data.get('recurrence')
 
         if is_recurring and not recurrence and not (self.instance and self.instance.recurrence):
-            raise serializers.ValidationError("Recurring event must include recurrence")
+            raise serializers.ValidationError('Recurring event must include recurrence')
 
         if not is_recurring and recurrence:
-            raise serializers.ValidationError("Non-recurring event must not include recurrence")
+            raise serializers.ValidationError('Non-recurring event must not include recurrence')
 
         return data
 
@@ -250,21 +249,21 @@ class EventSerializer(serializers.ModelSerializer):
 
         # Возвращаем time как UTC+0
         if instance.time is not None:
-            rep["time"] = shift_time_by_minutes(instance.time, -instance.timezone_offset).isoformat()
+            rep['time'] = shift_time_by_minutes(instance.time, -instance.timezone_offset).isoformat()
         return rep
 
     def create(self, validated_data):
-        recurrence_data = validated_data.pop("recurrence", None)
+        recurrence_data = validated_data.pop('recurrence', None)
 
-        if validated_data.get("is_recurring"):
+        if validated_data.get('is_recurring'):
             recurrence = RecurrenceRule.objects.create(**recurrence_data)
-            validated_data["recurrence"] = recurrence
+            validated_data['recurrence'] = recurrence
 
-        validated_data["user"] = self.context["request"].user
+        validated_data['user'] = self.context['request'].user
         return Event.objects.create(**validated_data)
 
     def update(self, instance, validated_data):
-        recurrence_data = validated_data.pop("recurrence", None)
+        recurrence_data = validated_data.pop('recurrence', None)
 
         # обновляем простые поля
         for attr, value in validated_data.items():
@@ -301,5 +300,5 @@ class EventOccurrenceSerializer(serializers.Serializer):
 class EventCompletionSerializer(serializers.ModelSerializer):
     class Meta:
         model = EventCompletion
-        fields = ("event", "occurrence_date", "done_at")
-        read_only_fields = ("done_at",)
+        fields = ('event', 'occurrence_date', 'done_at')
+        read_only_fields = ('done_at',)

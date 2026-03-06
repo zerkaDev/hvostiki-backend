@@ -44,7 +44,7 @@ class UserManager(BaseUserManager):
             # Можно сгенерировать случайный пароль или использовать дефолтный
             import secrets
             password = secrets.token_urlsafe(12)  # Генерация случайного пароля
-            print(f"⚠️  Warning: No password provided for superuser. Generated: {password}")
+            print(f'⚠️  Warning: No password provided for superuser. Generated: {password}')
 
         # Создаем пользователя с паролем
         user = self.create_user(
@@ -121,18 +121,18 @@ class PetType(models.TextChoices):
 
 
 class EventTypeChoices(models.TextChoices):
-    DEWORMING = "deworming", "Deworming"
-    YEARLY_VACCINATION = "yearlyVaccination", "Yearly vaccination"
-    RABIES_VACCINATION = "rabiesVaccination", "Rabies vaccination"
-    WEEKLY_PILLS = "weeklyPills", "Weekly pills"
-    DAILY_PILLS = "dailyPills", "Daily pills"
-    GROOMING = "grooming", "Grooming"
-    BATHING = "bathing", "Bathing"
-    WALKING = "walking", "Walking"
-    FEEDING = "feeding", "Feeding"
-    NAIL_TRIMMING = "nailTrimming", "Nail trimming"
-    FLEA_TREATMENT = "fleaTreatment", "Flea treatment"
-    CUSTOM = "custom", "Custom"
+    DEWORMING = 'deworming', 'Deworming'
+    YEARLY_VACCINATION = 'yearlyVaccination', 'Yearly vaccination'
+    RABIES_VACCINATION = 'rabiesVaccination', 'Rabies vaccination'
+    WEEKLY_PILLS = 'weeklyPills', 'Weekly pills'
+    DAILY_PILLS = 'dailyPills', 'Daily pills'
+    GROOMING = 'grooming', 'Grooming'
+    BATHING = 'bathing', 'Bathing'
+    WALKING = 'walking', 'Walking'
+    FEEDING = 'feeding', 'Feeding'
+    NAIL_TRIMMING = 'nailTrimming', 'Nail trimming'
+    FLEA_TREATMENT = 'fleaTreatment', 'Flea treatment'
+    CUSTOM = 'custom', 'Custom'
 
 
 class Breed(models.Model):
@@ -225,9 +225,9 @@ class Pet(models.Model):
 
 
 class RecurrenceFrequency(models.TextChoices):
-    DAILY = "daily", "Daily"
-    WEEKLY = "weekly", "Weekly"
-    MONTHLY = "monthly", "Monthly"
+    DAILY = 'daily', 'Daily'
+    WEEKLY = 'weekly', 'Weekly'
+    MONTHLY = 'monthly', 'Monthly'
 
 
 class RecurrenceRule(models.Model):
@@ -246,13 +246,13 @@ class RecurrenceRule(models.Model):
 
     def clean(self):
         if self.frequency == RecurrenceFrequency.WEEKLY and not self.week_days:
-            raise ValidationError("week_days required for weekly recurrence")
+            raise ValidationError('week_days required for weekly recurrence')
 
         if self.frequency == RecurrenceFrequency.MONTHLY and not self.month_days:
-            raise ValidationError("month_days required for monthly recurrence")
+            raise ValidationError('month_days required for monthly recurrence')
 
     def __str__(self):
-        return f"{self.frequency}"
+        return f'{self.frequency}'
 
     class Meta:
         verbose_name = 'Правило расписания'
@@ -268,7 +268,7 @@ class Event(models.Model):
     pet = models.ForeignKey(
         Pet,
         on_delete=models.CASCADE,
-        related_name="events",
+        related_name='events',
     )
 
     title = models.CharField(max_length=255)
@@ -285,7 +285,7 @@ class Event(models.Model):
         on_delete=models.CASCADE,
         null=True,
         blank=True,
-        related_name="events",
+        related_name='events',
     )
 
     done = models.BooleanField(default=False)
@@ -300,28 +300,28 @@ class Event(models.Model):
 
     def clean(self):
         if self.is_recurring and not self.recurrence:
-            raise ValidationError("Recurring event must have recurrence rule")
+            raise ValidationError('Recurring event must have recurrence rule')
 
         if not self.is_recurring and self.recurrence:
-            raise ValidationError("Non-recurring event must not have recurrence rule")
+            raise ValidationError('Non-recurring event must not have recurrence rule')
 
     def __str__(self):
         return self.title
 
 
 class EventNotificationLog(models.Model):
-    event = models.ForeignKey("Event", on_delete=models.CASCADE)
+    event = models.ForeignKey('Event', on_delete=models.CASCADE)
     occurrence_date = models.DateField()
     sent_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ("event", "occurrence_date")
+        unique_together = ('event', 'occurrence_date')
 
 
 class EventCompletion(models.Model):
-    event = models.ForeignKey("Event", on_delete=models.CASCADE)
+    event = models.ForeignKey('Event', on_delete=models.CASCADE)
     occurrence_date = models.DateField()
     done_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ("event", "occurrence_date")
+        unique_together = ('event', 'occurrence_date')

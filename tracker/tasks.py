@@ -18,7 +18,7 @@ def send_confirmation_code(phone_number, confirmation_code):
 def send_event_notifications():
     now_utc = timezone.now()
 
-    events = Event.objects.select_related("recurrence").all()
+    events = Event.objects.select_related('recurrence').all()
 
     for event in events:
         now_local = now_utc + timedelta(minutes=event.timezone_offset)

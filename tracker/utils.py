@@ -38,14 +38,14 @@ def generate_occurrences(event, date_from, date_to):
         if rule.end_date and current > rule.end_date:
             break
 
-        if rule.frequency == "daily":
+        if rule.frequency == 'daily':
             occurrences.append(current)
 
-        elif rule.frequency == "weekly":
+        elif rule.frequency == 'weekly':
             if current.isoweekday() in (rule.week_days or []):
                 occurrences.append(current)
 
-        elif rule.frequency == "monthly":
+        elif rule.frequency == 'monthly':
             if current.day in (rule.month_days or []):
                 occurrences.append(current)
 

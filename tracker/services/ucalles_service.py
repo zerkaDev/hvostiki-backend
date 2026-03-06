@@ -1,11 +1,9 @@
-# tracker/services/ucaller_service.py
 from urllib.parse import urljoin
 
 import requests
 import logging
 from django.conf import settings
-from typing import Optional, Dict, Any
-from datetime import datetime
+from typing import Any
 
 from tracker.utils import normalize_phone
 
@@ -53,8 +51,8 @@ class UCallerService:
 
         # Подготавливаем данные
         data = {
-            "phone": normalized_phone,
-            "code": code,
+            'phone': normalized_phone,
+            'code': code,
         }
 
         url = urljoin(self.api_url, 'initCall')
@@ -62,8 +60,8 @@ class UCallerService:
         response = requests.post(
             url=url,
             headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.get_auth_header()}"
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {self.get_auth_header()}'
             },
             json=data,
             timeout=10  # 10 секунд таймаут
@@ -74,8 +72,8 @@ class UCallerService:
         result = response.json()
 
         logger.info(
-            f"Call sent to {phone}. "
-            f"result: {result}"
+            f'Call sent to {phone}. '
+            f'result: {result}'
         )
 
         return result
