@@ -1,4 +1,5 @@
 import datetime
+from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator, MinValueValidator, FileExtensionValidator
@@ -173,7 +174,7 @@ class Pet(models.Model):
     weight = models.DecimalField(
         max_digits=5,
         decimal_places=2,
-        validators=[MinValueValidator(0.01)],
+        validators=[MinValueValidator(Decimal('0.01'))],
         verbose_name='Вес (кг)',
         help_text='Вес в килограммах'
     )

@@ -179,7 +179,7 @@ PET_VIEWSET_SCHEMAS = {
         summary='Получить информацию о питомце',
         tags=['pets'],
         parameters=[
-            OpenApiParameter(name='id', type=OpenApiTypes.UUID, location=OpenApiParameter.PATH, description='ID питомца'),
+            OpenApiParameter(name='id', type=OpenApiTypes.INT, location=OpenApiParameter.PATH, description='ID питомца'),
         ],
         responses={200: PetSerializer, 404: OpenApiTypes.OBJECT}
     ),
@@ -239,7 +239,8 @@ EVENT_VIEWSET_SCHEMAS = {
             OpenApiExample(
                 name='Recurring weekly example',
                 value={
-                    'pet': 'uuid',
+                    'pet': 1,
+                    'type': 'feeding',
                     'title': 'Дать таблетку',
                     'description': 'После еды',
                     'start_date': '2026-02-20',
@@ -266,7 +267,7 @@ EVENT_VIEWSET_SCHEMAS = {
         parameters=[
             OpenApiParameter(name='date_from', type=OpenApiTypes.DATE, location=OpenApiParameter.QUERY, required=True),
             OpenApiParameter(name='date_to', type=OpenApiTypes.DATE, location=OpenApiParameter.QUERY, required=True),
-            OpenApiParameter(name='pet_id', type=OpenApiTypes.UUID, location=OpenApiParameter.QUERY, required=False),
+            OpenApiParameter(name='pet_id', type=OpenApiTypes.INT, location=OpenApiParameter.QUERY, required=False),
         ],
         responses={
             200: OpenApiResponse(

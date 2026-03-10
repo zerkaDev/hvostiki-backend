@@ -210,8 +210,10 @@ class EventSerializer(serializers.ModelSerializer):
             'recurrence',
             'type',
             'done',
+            'created_at',
+            'updated_at',
         )
-        read_only_fields = ('id',)
+        read_only_fields = ('id', 'created_at', 'updated_at')
 
     def validate_timezone_offset(self, value):
         # Реалистичный диапазон часовых поясов: [-14:00, +14:00]
@@ -250,6 +252,9 @@ class EventSerializer(serializers.ModelSerializer):
         # Возвращаем time как UTC+0
         if instance.time is not None:
             rep['time'] = shift_time_by_minutes(instance.time, -instance.timezone_offset).isoformat()
+        
+        # Добавляем полный объект питомца для чтения
+        rep['pet_obj'] = PetSerializer(instance.pet, context=self.context).data
         return rep
 
     def create(self, validated_data):
@@ -294,7 +299,7 @@ class EventOccurrenceSerializer(serializers.Serializer):
     title = serializers.CharField()
     date = serializers.DateField()
     time = serializers.TimeField()
-    pet_id = serializers.UUIDField()
+    pet_id = serializers.IntegerField()
 
 
 class EventCompletionSerializer(serializers.ModelSerializer):
