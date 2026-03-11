@@ -312,5 +312,23 @@ EVENT_VIEWSET_SCHEMAS = {
             OpenApiExample(name='Mark occurrence done', request_only=True, value={'date': '2026-02-20'}),
         ],
         tags=['events'],
+    ),
+    'mark_undone': extend_schema(
+        summary='Отменить выполнение события',
+        description="""
+                Удаляет отметку о выполнении для конкретного occurrence события.
+                """,
+        request=OpenApiTypes.OBJECT,
+        responses={
+            200: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description='Отметка о выполнении успешно удалена',
+                examples=[OpenApiExample(name='Success', value={'done': False})],
+            ),
+        },
+        examples=[
+            OpenApiExample(name='Unmark occurrence done', request_only=True, value={'date': '2026-02-20'}),
+        ],
+        tags=['events'],
     )
 }

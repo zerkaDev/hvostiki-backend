@@ -239,3 +239,14 @@ class EventViewSet(viewsets.ModelViewSet):
 
         EventCompletion.objects.get_or_create(event=event, occurrence_date=occurrence_date)
         return Response({'done': True})
+
+    @action(detail=True, methods=['post'])
+    def mark_undone(self, request, pk=None):
+        """Отменить выполнение события на дату"""
+        event = self.get_object()
+        occurrence_date = parse_date(request.data.get('date'))
+        if not occurrence_date:
+            return Response({'detail': 'date is required'}, status=400)
+
+        EventCompletion.objects.filter(event=event, occurrence_date=occurrence_date).delete()
+        return Response({'done': False})

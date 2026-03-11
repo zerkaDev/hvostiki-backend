@@ -60,6 +60,18 @@ class TestEvents:
         assert response.data['done'] is True
         assert EventCompletion.objects.filter(event=event, occurrence_date=event.start_date).exists()
 
+    def test_mark_undone(self, auth_client, event):
+        # Сначала помечаем как выполненное
+        EventCompletion.objects.create(event=event, occurrence_date=event.start_date)
+        
+        url = reverse('event_schedule-mark-undone', kwargs={'pk': event.id})
+        data = {'date': str(event.start_date)}
+        response = auth_client.post(url, data)
+        
+        assert response.status_code == 200
+        assert response.data['done'] is False
+        assert not EventCompletion.objects.filter(event=event, occurrence_date=event.start_date).exists()
+
     def test_period_events_sorting_and_grouping(self, auth_client, user, pet):
         """Тест группировки по датам и сортировки по времени внутри периода"""
         url = reverse('event_schedule-period')
