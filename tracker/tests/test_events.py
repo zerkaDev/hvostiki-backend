@@ -133,3 +133,45 @@ class TestEvents:
         # 07:00 (daily) должно быть первым, 10:00 (разовое) вторым
         assert "07:00" in tomorrow_events[0]['time']
         assert "10:00" in tomorrow_events[1]['time']
+
+    def test_create_event_without_time(self, auth_client, pet):
+        url = reverse('event_schedule-list')
+        data = {
+            'pet': str(pet.id),
+            'title': 'Vet visit no time',
+            'start_date': str(datetime.date.today()),
+            'timezone_offset': 180,
+            'is_recurring': False,
+            'type': EventTypeChoices.CUSTOM
+        }
+        response = auth_client.post(url, data, format='json')
+        assert response.status_code == 201
+        assert Event.objects.filter(title='Vet visit no time').exists()
+        event = Event.objects.get(title='Vet visit no time')
+        assert event.time is None
+
+    def test_period_events_sorting_with_none_time(self, auth_client, user, pet):
+        url = reverse('event_schedule-period')
+        today = datetime.date.today()
+
+        # Event with time
+        Event.objects.create(
+            user=user, pet=pet, title="Timed Event",
+            start_date=today, time=datetime.time(12, 0), 
+            type=EventTypeChoices.CUSTOM, timezone_offset=0
+        )
+        # Event without time
+        Event.objects.create(
+            user=user, pet=pet, title="No Time Event",
+            start_date=today, time=None, 
+            type=EventTypeChoices.CUSTOM, timezone_offset=0
+        )
+
+        response = auth_client.get(f"{url}?date_from={today}&date_to={today}")
+        assert response.status_code == 200
+
+        today_events = response.data[str(today)]
+        our_events = [e for e in today_events if e['title'] in ["Timed Event", "No Time Event"]]
+        assert len(our_events) == 2
+        assert our_events[0]['title'] == "No Time Event"
+        assert our_events[1]['title'] == "Timed Event"

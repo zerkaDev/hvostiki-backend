@@ -214,6 +214,9 @@ class EventSerializer(serializers.ModelSerializer):
             'updated_at',
         )
         read_only_fields = ('id', 'created_at', 'updated_at')
+        extra_kwargs = {
+            'time': {'required': False, 'allow_null': True}
+        }
 
     def validate_timezone_offset(self, value):
         # Реалистичный диапазон часовых поясов: [-14:00, +14:00]

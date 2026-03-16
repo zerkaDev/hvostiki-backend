@@ -136,6 +136,12 @@ class EventTypeChoices(models.TextChoices):
     CUSTOM = 'custom', 'Custom'
 
 
+class EventNotificationType(models.TextChoices):
+    STANDARD = 'standard', 'Standard'
+    REMINDER = 'reminder', 'Reminder (day before)'
+    FINAL = 'final', 'Final (day of)'
+
+
 class Breed(models.Model):
     name = models.CharField(max_length=200, verbose_name='Название')
     type = models.CharField(
@@ -276,7 +282,7 @@ class Event(models.Model):
     description = models.TextField(blank=True)
 
     start_date = models.DateField()
-    time = models.TimeField()
+    time = models.TimeField(null=True, blank=True)
     timezone_offset = models.IntegerField(default=0)
 
     is_recurring = models.BooleanField(default=False)
@@ -313,10 +319,15 @@ class Event(models.Model):
 class EventNotificationLog(models.Model):
     event = models.ForeignKey('Event', on_delete=models.CASCADE)
     occurrence_date = models.DateField()
+    notification_type = models.CharField(
+        max_length=16,
+        choices=EventNotificationType.choices,
+        default=EventNotificationType.STANDARD
+    )
     sent_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('event', 'occurrence_date')
+        unique_together = ('event', 'occurrence_date', 'notification_type')
 
 
 class EventCompletion(models.Model):

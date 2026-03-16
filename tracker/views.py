@@ -221,7 +221,7 @@ class EventViewSet(viewsets.ModelViewSet):
 
         # Сортируем события внутри каждой даты по времени
         for date_key in grouped_result:
-            grouped_result[date_key].sort(key=lambda x: x.get('time', ''))
+            grouped_result[date_key].sort(key=lambda x: x.get('time') or '')
 
         # Возвращаем словарь, отсортированный по ключам-датам
         sorted_keys = sorted(grouped_result.keys())
