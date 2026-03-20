@@ -2,9 +2,10 @@ from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
 
-from tracker.models import Event, EventNotificationLog, EventCompletion, EventNotificationType, RecurrenceFrequency
+from tracker.models import Event, EventNotificationLog, EventCompletion, EventNotificationType, RecurrenceFrequency, FCMDevice
 
 from tracker.services.ucalles_service import UCallerService
+from tracker.services.firebase_service import firebase_service
 from tracker.utils import generate_occurrences
 
 
@@ -17,7 +18,8 @@ def send_confirmation_code(phone_number, confirmation_code):
 @shared_task
 def send_event_notifications():
     now_utc = timezone.now()
-    events = Event.objects.select_related('recurrence').all()
+    # Загружаем события с питомцами и пользователями
+    events = Event.objects.select_related('recurrence', 'pet', 'user').all()
 
     for event in events:
         now_local = now_utc + timedelta(minutes=event.timezone_offset)
@@ -57,7 +59,7 @@ def send_event_notifications():
         if not occurrences:
             continue
 
-        # Проверяем, не выполнено ли уже (для напоминаний за день до - обычно не актуально, но на всякий случай)
+        # Проверяем, не выполнено ли уже
         if EventCompletion.objects.filter(event=event, occurrence_date=occurrence_date).exists():
             continue
 
@@ -71,8 +73,22 @@ def send_event_notifications():
         if already_sent:
             continue
 
-        # TODO 👉 Отправка пуша
-        # send_push(event)
+        # Формируем текст уведомления
+        title = f"{event.pet.name}: {event.title}"
+        if notification_type == EventNotificationType.REMINDER:
+            body = f"Напоминание: завтра в плане {event.title}"
+        else:
+            body = event.description or f"Пора выполнить: {event.title}"
+
+        # Отправка пуша на все устройства пользователя
+        devices = FCMDevice.objects.filter(user=event.user)
+        for device in devices:
+            firebase_service.send_push_notification(
+                token=device.fcm_token,
+                title=title,
+                body=body,
+                data={'event_id': str(event.id), 'type': notification_type}
+            )
 
         # Логируем
         EventNotificationLog.objects.create(

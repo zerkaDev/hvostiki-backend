@@ -6,10 +6,25 @@ from tracker.models import PetType
 from tracker.serializers import (
     PhoneNumberSerializer, VerifyCodeSerializer, PetSerializer, 
     PetCreateSerializer, RefreshTokenSerializer, TokenResponseSerializer, 
-    ErrorResponseSerializer, BreedSerializer, EventSerializer
+    ErrorResponseSerializer, BreedSerializer, EventSerializer,
+    DeviceRegistrationSerializer
 )
 
 # --- Authentication ---
+
+REGISTER_DEVICE_SCHEMA = extend_schema(
+    tags=['Устройства'],
+    summary='Регистрация FCM токена',
+    description="""
+    Регистрирует FCM токен устройства для текущего пользователя.
+    Если токен уже существует у другого пользователя, он будет перепривязан к текущему.
+    """,
+    request=DeviceRegistrationSerializer,
+    responses={
+        200: OpenApiResponse(description='Токен успешно зарегистрирован'),
+        400: OpenApiResponse(description='Ошибка валидации'),
+    }
+)
 
 SEND_CODE_SCHEMA = extend_schema(
     tags=['Аутентификация'],

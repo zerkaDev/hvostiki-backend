@@ -337,3 +337,14 @@ class EventCompletion(models.Model):
 
     class Meta:
         unique_together = ('event', 'occurrence_date')
+
+
+class FCMDevice(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fcm_devices')
+    fcm_token = models.TextField(unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'FCM устройство'
+        verbose_name_plural = 'FCM устройства'

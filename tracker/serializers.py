@@ -150,6 +150,10 @@ class RefreshTokenSerializer(serializers.Serializer):
     refresh = serializers.CharField(help_text='Refresh token obtained during authentication')
 
 
+class DeviceRegistrationSerializer(serializers.Serializer):
+    fcm_token = serializers.CharField(required=True)
+
+
 class RecurrenceRuleSerializer(serializers.ModelSerializer):
 
     class Meta:

@@ -14,10 +14,11 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import extend_schema_view
 
-from tracker.models import User, Pet, Breed, PetType, Event, EventCompletion
+from tracker.models import User, Pet, Breed, PetType, Event, EventCompletion, FCMDevice
 from tracker.serializers import (
     PhoneNumberSerializer, VerifyCodeSerializer, UserSerializer, 
-    PetSerializer, PetCreateSerializer, BreedSerializer, EventSerializer
+    PetSerializer, PetCreateSerializer, BreedSerializer, EventSerializer,
+    DeviceRegistrationSerializer
 )
 from tracker.tasks import send_confirmation_code
 from tracker.utils import generate_occurrences
@@ -108,8 +109,27 @@ class RefreshTokenView(APIView):
                 'access_expires': new_refresh.access_token.payload['exp'],
                 'refresh_expires': new_refresh.payload['exp']
             })
-        except (TokenError, Exception) as e:
+        except Exception as e:
             return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+class RegisterDeviceView(APIView):
+    """Регистрация FCM токена устройства"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @schemas.REGISTER_DEVICE_SCHEMA
+    def post(self, request):
+        serializer = DeviceRegistrationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        fcm_token = serializer.validated_data['fcm_token']
+
+        # Если токен уже у кого-то есть, обновляем владельца
+        FCMDevice.objects.update_or_create(
+            fcm_token=fcm_token,
+            defaults={'user': request.user}
+        )
+
+        return Response({'detail': 'Токен успешно зарегистрирован'}, status=status.HTTP_200_OK)
 
 
 class LogoutView(APIView):
