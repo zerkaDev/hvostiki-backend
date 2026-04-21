@@ -147,8 +147,14 @@ class LogoutView(APIView):
 
 # --- Profile & Pets ---
 
-class ProfileView(generics.RetrieveAPIView):
-    """Профиль текущего пользователя"""
+@extend_schema_view(
+    get=schemas.PROFILE_SCHEMA_GET,
+    put=schemas.PROFILE_SCHEMA_PUT,
+    patch=schemas.PROFILE_SCHEMA_PATCH,
+    delete=schemas.PROFILE_SCHEMA_DELETE,
+)
+class ProfileView(generics.RetrieveUpdateDestroyAPIView):
+    """Профиль текущего пользователя (просмотр, обновление, удаление)"""
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = UserSerializer
 

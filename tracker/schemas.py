@@ -7,7 +7,7 @@ from tracker.serializers import (
     PhoneNumberSerializer, VerifyCodeSerializer, PetSerializer, 
     PetCreateSerializer, RefreshTokenSerializer, TokenResponseSerializer, 
     ErrorResponseSerializer, BreedSerializer, EventSerializer,
-    DeviceRegistrationSerializer
+    DeviceRegistrationSerializer, UserSerializer
 )
 
 # --- Authentication ---
@@ -347,3 +347,35 @@ EVENT_VIEWSET_SCHEMAS = {
         tags=['events'],
     )
 }
+
+# --- Profile ---
+
+PROFILE_SCHEMA_GET = extend_schema(
+    summary='Получить профиль пользователя',
+    description='Возвращает данные текущего авторизованного пользователя',
+    tags=['Профиль'],
+    responses={200: UserSerializer}
+)
+
+PROFILE_SCHEMA_PUT = extend_schema(
+    summary='Обновить профиль пользователя',
+    description='Полное обновление данных профиля',
+    tags=['Профиль'],
+    request=UserSerializer,
+    responses={200: UserSerializer}
+)
+
+PROFILE_SCHEMA_PATCH = extend_schema(
+    summary='Частично обновить профиль пользователя',
+    description='Частичное обновление данных профиля',
+    tags=['Профиль'],
+    request=UserSerializer,
+    responses={200: UserSerializer}
+)
+
+PROFILE_SCHEMA_DELETE = extend_schema(
+    summary='Удалить профиль пользователя',
+    description='Удаляет аккаунт текущего пользователя',
+    tags=['Профиль'],
+    responses={204: None}
+)

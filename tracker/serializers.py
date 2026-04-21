@@ -70,7 +70,7 @@ class VerifyCodeSerializer(serializers.Serializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
-    """Сериализатор для отображения данных пользователя"""
+    """Сериализатор для отображения и редактирования данных пользователя"""
 
     class Meta:
         model = User
@@ -80,7 +80,7 @@ class UserSerializer(serializers.ModelSerializer):
             'is_verified',
             'created_at',
         ]
-        read_only_fields = fields
+        read_only_fields = ['id', 'is_verified', 'created_at']
 
 
 class BreedSerializer(serializers.ModelSerializer):
