@@ -1,6 +1,7 @@
 import pytest
 from django.urls import reverse
 from unittest.mock import patch
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from tracker.models import User
 
 @pytest.mark.django_db
@@ -54,8 +55,58 @@ class TestAuth:
         assert response.status_code == 400
         assert 'code' in response.data
 
-    def test_logout(self, auth_client):
+    def test_refresh_token_success(self, api_client, user):
+        refresh = RefreshToken.for_user(user)
+
+        response = api_client.post(
+            reverse('token-refresh'),
+            {'refresh': str(refresh)},
+            format='json',
+        )
+
+        assert response.status_code == 200
+        assert response.data['refresh'] == str(refresh)
+        assert response.data['refresh_expires'] == refresh.payload['exp']
+
+        access = AccessToken(response.data['access'])
+        assert access['user_id'] == str(user.id)
+        assert response.data['access_expires'] == access.payload['exp']
+
+    def test_refresh_token_rejects_invalid_token(self, api_client):
+        response = api_client.post(
+            reverse('token-refresh'),
+            {'refresh': 'not-a-jwt'},
+            format='json',
+        )
+
+        assert response.status_code == 401
+
+    def test_refresh_token_requires_token(self, api_client):
+        response = api_client.post(reverse('token-refresh'), {}, format='json')
+
+        assert response.status_code == 400
+
+    def test_logout_revokes_submitted_refresh_token(self, auth_client, user):
+        refresh = RefreshToken.for_user(user)
         url = reverse('logout')
-        response = auth_client.post(url)
+
+        response = auth_client.post(
+            url,
+            {'refresh': str(refresh)},
+            format='json',
+        )
+
         assert response.status_code == 200
         assert response.data['detail'] == 'Выход выполнен успешно'
+
+        refresh_response = auth_client.post(
+            reverse('token-refresh'),
+            {'refresh': str(refresh)},
+            format='json',
+        )
+        assert refresh_response.status_code == 401
+
+    def test_logout_requires_refresh_token(self, auth_client):
+        response = auth_client.post(reverse('logout'), {}, format='json')
+
+        assert response.status_code == 400

@@ -130,8 +130,9 @@ REFRESH_TOKEN_SCHEMA = extend_schema(
     **Важно:**
     - Refresh token действителен 7 дней
     - Access token действителен 60 минут
-    - При каждом обновлении выдается новый refresh token (ротация токенов)
-    - Старый refresh token становится недействительным
+    - Ротация refresh token отключена
+    - В ответе возвращается тот же refresh token с исходным сроком действия
+    - Refresh token становится недействительным после выхода или истечения срока
     """,
     request=RefreshTokenSerializer,
     responses={
@@ -153,6 +154,22 @@ REFRESH_TOKEN_SCHEMA = extend_schema(
 LOGOUT_SCHEMA = extend_schema(
     tags=['Аутентификация'],
     summary='Выход из системы',
+    description='Отзывает переданный refresh token текущей сессии.',
+    request=RefreshTokenSerializer,
+    responses={
+        200: OpenApiResponse(
+            response=ErrorResponseSerializer,
+            description='Выход выполнен успешно',
+        ),
+        400: OpenApiResponse(
+            response=ErrorResponseSerializer,
+            description='Refresh token не передан',
+        ),
+        401: OpenApiResponse(
+            response=ErrorResponseSerializer,
+            description='Refresh token неверен, просрочен или уже отозван',
+        ),
+    },
 )
 
 # --- Pets ---
