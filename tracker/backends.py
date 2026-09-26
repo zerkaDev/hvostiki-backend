@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth.backends import BaseBackend
 from django.contrib.auth import get_user_model
 from django.db.models import Q
@@ -11,25 +12,34 @@ class PhoneBackend(BaseBackend):
     """
 
     def authenticate(self, request, username=None, password=None, **kwargs):
-        # Пытаемся найти пользователя по номеру телефона
-        try:
-            user = User.objects.get(
-                Q(phone_number=username) |
-                Q(email=username) |
-                Q(username=username) if hasattr(User, 'username') else Q(phone_number=username)
-            )
-
-            # Проверяем пароль
-            if user.check_password(password):
-                return user
-            elif not user.has_usable_password() and password == '':
-                # Для пользователей без пароля (только телефонная аутентификация)
-                # Разрешаем вход с пустым паролем в админке (только для разработки!)
-                if user.is_staff or user.is_superuser:
-                    return user
-
-        except User.DoesNotExist:
+        if not username:
             return None
+
+        # Собираем условия явно: у модели нет ни username, ни email,
+        # но если появятся — поиск будет учитывать и их.
+        query = Q(phone_number=username)
+        if hasattr(User, 'username'):
+            query |= Q(username=username)
+        if hasattr(User, 'email'):
+            query |= Q(email=username)
+
+        try:
+            user = User.objects.get(query)
+        except (User.DoesNotExist, User.MultipleObjectsReturned):
+            return None
+
+        if user.check_password(password):
+            return user
+
+        # Вход staff-пользователя без пароля с пустым паролем разрешён
+        # только локально: в проде это открыло бы доступ в админку.
+        if (
+            settings.DEBUG
+            and not user.has_usable_password()
+            and not password
+            and (user.is_staff or user.is_superuser)
+        ):
+            return user
 
         return None
 

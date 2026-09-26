@@ -52,8 +52,12 @@ class VerifyCodeSerializer(serializers.Serializer):
                 'code': 'Превышено количество попыток. Запросите новый код.'
             })
 
-        # Проверяем код
-        expected_code = '1234' if settings.DEBUG else user.confirmation_code
+        # Код для локальной разработки задаётся в .env (DEBUG_CONFIRMATION_CODE).
+        # Без него принимается только реально отправленный код — так включённый
+        # по ошибке DEBUG не превращается во вход по любому номеру.
+        expected_code = user.confirmation_code
+        if settings.DEBUG and settings.DEBUG_CONFIRMATION_CODE:
+            expected_code = settings.DEBUG_CONFIRMATION_CODE
         
         if code != expected_code:
             user.increment_code_attempts()
@@ -165,6 +169,10 @@ class RecurrenceRuleSerializer(serializers.ModelSerializer):
             'month_days',
             'end_date',
         )
+        extra_kwargs = {
+            # interval = «каждые N дней/недель/месяцев», 0 не имеет смысла
+            'interval': {'min_value': 1},
+        }
 
     def validate(self, data):
         frequency = data.get('frequency')
@@ -174,6 +182,14 @@ class RecurrenceRuleSerializer(serializers.ModelSerializer):
 
         if frequency == RecurrenceFrequency.MONTHLY and not data.get('month_days'):
             raise serializers.ValidationError('month_days required for monthly recurrence')
+
+        week_days = data.get('week_days') or []
+        if any(not isinstance(day, int) or not 1 <= day <= 7 for day in week_days):
+            raise serializers.ValidationError('week_days must contain values from 1 to 7')
+
+        month_days = data.get('month_days') or []
+        if any(not isinstance(day, int) or not 1 <= day <= 31 for day in month_days):
+            raise serializers.ValidationError('month_days must contain values from 1 to 31')
 
         return data
 

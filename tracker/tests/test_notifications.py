@@ -128,3 +128,80 @@ class TestNotifications:
         )
         
         assert EventNotificationLog.objects.filter(event=event, occurrence_date=today).count() == 2
+
+    def test_event_with_time_sends_within_lookback_window(self, user, pet):
+        """Beat может опоздать: уведомление уходит, если момент уже наступил."""
+        event_time = time(15, 30)
+        event = Event.objects.create(
+            user=user, pet=pet, title="Late Beat Task",
+            start_date=date.today(), time=event_time,
+            is_recurring=False,
+            timezone_offset=0
+        )
+
+        # Beat сработал на минуту позже
+        mock_now = datetime.combine(date.today(), time(15, 31))
+        with patch('django.utils.timezone.now', return_value=timezone.make_aware(mock_now)):
+            send_event_notifications()
+
+        assert EventNotificationLog.objects.filter(
+            event=event,
+            notification_type=EventNotificationType.STANDARD,
+            occurrence_date=date.today()
+        ).exists()
+
+    def test_event_with_time_not_sent_outside_lookback_window(self, user, pet):
+        event_time = time(15, 30)
+        event = Event.objects.create(
+            user=user, pet=pet, title="Too Late Task",
+            start_date=date.today(), time=event_time,
+            is_recurring=False,
+            timezone_offset=0
+        )
+
+        # Опоздали на 10 минут — окно срабатывания уже прошло
+        mock_now = datetime.combine(date.today(), time(15, 40))
+        with patch('django.utils.timezone.now', return_value=timezone.make_aware(mock_now)):
+            send_event_notifications()
+
+        assert not EventNotificationLog.objects.filter(event=event).exists()
+
+    def test_event_after_midnight_uses_previous_day(self, user, pet):
+        """Событие почти в полночь и задержавшийся beat не должны терять уведомление."""
+        event_time = time(23, 59)
+        event = Event.objects.create(
+            user=user, pet=pet, title="Midnight Task",
+            start_date=date.today(), time=event_time,
+            is_recurring=False,
+            timezone_offset=0
+        )
+
+        mock_now = datetime.combine(date.today() + timedelta(days=1), time(0, 0))
+        with patch('django.utils.timezone.now', return_value=timezone.make_aware(mock_now)):
+            send_event_notifications()
+
+        assert EventNotificationLog.objects.filter(
+            event=event,
+            notification_type=EventNotificationType.STANDARD,
+            occurrence_date=date.today()
+        ).exists()
+
+
+def test_beat_schedule_references_registered_tasks():
+    """Все задачи в CELERY_BEAT_SCHEDULE должны быть зарегистрированы в Celery.
+
+    Регрессия: раньше в расписании стояло 'events.tasks.*', а задача
+    регистрируется как 'tracker.tasks.*', из-за чего beat падал с NotRegistered.
+    """
+    from django.conf import settings
+    from config.celery import app
+
+    app.loader.import_default_modules()
+    registered = set(app.tasks)
+
+    missing = [
+        f'{name}: {entry["task"]}'
+        for name, entry in settings.CELERY_BEAT_SCHEDULE.items()
+        if entry['task'] not in registered
+    ]
+    assert not missing, f'Незарегистрированные задачи в CELERY_BEAT_SCHEDULE: {missing}'

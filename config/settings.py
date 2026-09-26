@@ -2,6 +2,8 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from celery.schedules import crontab
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -13,6 +15,10 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG') == '1'
+
+# Код подтверждения для локальной разработки (пусто = выключено).
+# Работает только при DEBUG=1 и никогда не задаётся в проде.
+DEBUG_CONFIRMATION_CODE = os.getenv('DEBUG_CONFIRMATION_CODE', '')
 
 ALLOWED_HOSTS = os.getenv('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
@@ -186,8 +192,15 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 CELERY_BEAT_SCHEDULE = {
     'send-event-notifications-every-minute': {
-        'task': 'events.tasks.send_event_notifications',
+        # Имя задачи должно совпадать с реально зарегистрированным
+        # (tracker.tasks), иначе beat отправит несуществующую задачу.
+        'task': 'tracker.tasks.send_event_notifications',
         'schedule': 60.0,  # каждые 60 секунд
+    },
+    'flush-expired-jwt-tokens-daily': {
+        # Таблицы token_blacklist растут вечно, чистим просроченные записи.
+        'task': 'tracker.tasks.flush_expired_tokens',
+        'schedule': crontab(hour=3, minute=0),
     },
 }
 
