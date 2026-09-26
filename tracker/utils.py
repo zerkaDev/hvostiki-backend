@@ -33,20 +33,30 @@ def generate_occurrences(event, date_from, date_to):
         return occurrences
 
     rule = event.recurrence
+    # interval = «каждые N дней/недель/месяцев»; 0 недопустим (защита от деления на 0)
+    interval = max(1, rule.interval or 1)
+
+    # Точка отсчёта для недель/месяцев — неделя/месяц старта события
+    start_week = event.start_date - timedelta(days=event.start_date.isoweekday() - 1)
 
     while current <= date_to:
         if rule.end_date and current > rule.end_date:
             break
 
         if rule.frequency == 'daily':
-            occurrences.append(current)
+            if (current - event.start_date).days % interval == 0:
+                occurrences.append(current)
 
         elif rule.frequency == 'weekly':
-            if current.isoweekday() in (rule.week_days or []):
+            weeks_passed = (current - start_week).days // 7
+            if weeks_passed % interval == 0 and current.isoweekday() in (rule.week_days or []):
                 occurrences.append(current)
 
         elif rule.frequency == 'monthly':
-            if current.day in (rule.month_days or []):
+            months_passed = (current.year - event.start_date.year) * 12 + (
+                current.month - event.start_date.month
+            )
+            if months_passed % interval == 0 and current.day in (rule.month_days or []):
                 occurrences.append(current)
 
         current += timedelta(days=1)

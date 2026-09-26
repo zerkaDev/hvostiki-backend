@@ -2,6 +2,7 @@ import pytest
 from django.urls import reverse
 import datetime
 from tracker.models import Event, EventTypeChoices, EventCompletion, RecurrenceRule, RecurrenceFrequency
+from tracker.utils import generate_occurrences
 import tracker.models
 
 @pytest.mark.django_db
@@ -175,3 +176,100 @@ class TestEvents:
         assert len(our_events) == 2
         assert our_events[0]['title'] == "No Time Event"
         assert our_events[1]['title'] == "Timed Event"
+
+
+@pytest.mark.django_db
+class TestRecurrenceInterval:
+    """generate_occurrences должен учитывать interval («каждые N дней/недель/месяцев»)."""
+
+    def _make_event(self, user, pet, start_date, rule):
+        return Event.objects.create(
+            user=user, pet=pet, title='Recurring',
+            start_date=start_date, is_recurring=True, recurrence=rule,
+            type=EventTypeChoices.CUSTOM, timezone_offset=0,
+        )
+
+    def test_daily_interval_skips_days(self, user, pet):
+        start = datetime.date(2026, 1, 5)
+        rule = RecurrenceRule.objects.create(
+            frequency=RecurrenceFrequency.DAILY, interval=2
+        )
+        event = self._make_event(user, pet, start, rule)
+
+        occurrences = generate_occurrences(event, start, start + datetime.timedelta(days=5))
+
+        assert occurrences == [
+            start,
+            start + datetime.timedelta(days=2),
+            start + datetime.timedelta(days=4),
+        ]
+
+    def test_weekly_interval_uses_every_second_week(self, user, pet):
+        start = datetime.date(2026, 1, 5)  # понедельник
+        rule = RecurrenceRule.objects.create(
+            frequency=RecurrenceFrequency.WEEKLY, interval=2, week_days=[1]
+        )
+        event = self._make_event(user, pet, start, rule)
+
+        occurrences = generate_occurrences(event, start, start + datetime.timedelta(days=20))
+
+        assert occurrences == [start, start + datetime.timedelta(days=14)]
+
+    def test_monthly_interval_uses_every_third_month(self, user, pet):
+        start = datetime.date(2026, 1, 10)
+        rule = RecurrenceRule.objects.create(
+            frequency=RecurrenceFrequency.MONTHLY, interval=3, month_days=[10]
+        )
+        event = self._make_event(user, pet, start, rule)
+
+        occurrences = generate_occurrences(event, start, datetime.date(2026, 7, 31))
+
+        assert occurrences == [
+            datetime.date(2026, 1, 10),
+            datetime.date(2026, 4, 10),
+            datetime.date(2026, 7, 10),
+        ]
+
+    def test_interval_one_behaves_as_before(self, user, pet):
+        start = datetime.date(2026, 1, 5)
+        rule = RecurrenceRule.objects.create(
+            frequency=RecurrenceFrequency.DAILY, interval=1
+        )
+        event = self._make_event(user, pet, start, rule)
+
+        occurrences = generate_occurrences(event, start, start + datetime.timedelta(days=2))
+
+        assert occurrences == [
+            start,
+            start + datetime.timedelta(days=1),
+            start + datetime.timedelta(days=2),
+        ]
+
+    def test_zero_interval_does_not_crash(self, user, pet):
+        """interval=0 не должен приводить к ZeroDivisionError."""
+        start = datetime.date(2026, 1, 5)
+        rule = RecurrenceRule.objects.create(
+            frequency=RecurrenceFrequency.DAILY, interval=0
+        )
+        event = self._make_event(user, pet, start, rule)
+
+        occurrences = generate_occurrences(event, start, start + datetime.timedelta(days=2))
+
+        assert len(occurrences) == 3
+
+    def test_event_recurrence_interval_must_be_positive(self, auth_client, pet):
+        url = reverse('event_schedule-list')
+        data = {
+            'pet': str(pet.id),
+            'title': 'Bad interval',
+            'start_date': str(datetime.date.today()),
+            'timezone_offset': 0,
+            'is_recurring': True,
+            'recurrence': {'frequency': 'daily', 'interval': 0},
+            'type': EventTypeChoices.CUSTOM,
+        }
+
+        response = auth_client.post(url, data, format='json')
+
+        assert response.status_code == 400
+        assert not Event.objects.filter(title='Bad interval').exists()
