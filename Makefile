@@ -23,10 +23,8 @@ help:
 	@echo "  make su        - Create superuser"
 	@echo "  make static    - Collect static files"
 	@echo ""
-	@echo "Tests & Linting:"
+	@echo "Tests:"
 	@echo "  make test      - Run all tests (usage: make test args=\"-v path/to/test\")"
-	@echo "  make lint      - Check code style (black)"
-	@echo "  make format    - Autoformat code (black)"
 	@echo ""
 	@echo "Utils:"
 	@echo "  make clean     - Stop and remove volumes/orphans"
@@ -74,17 +72,11 @@ su:
 static:
 	$(DC) -f $(FILE) exec $(SERVICE) python manage.py collectstatic --noinput
 
-# ====== TESTS & LINTING ======
-.PHONY: test lint format
+# ====== TESTS ======
+.PHONY: test
 
 test:
 	$(DC) -f $(FILE) exec $(SERVICE) pytest $(args)
-
-lint:
-	$(DC) -f $(FILE) exec $(SERVICE) black --check .
-
-format:
-	$(DC) -f $(FILE) exec $(SERVICE) black .
 
 # ====== UTILS ======
 .PHONY: clean reset-db

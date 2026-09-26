@@ -28,7 +28,6 @@ dev = [
     "pytest (>=8.0)",
     "pytest-django (>=4.8)",
     "django-debug-toolbar (>=4.4)",
-    "black (>=24.0)",
 ]
 
 [build-system]
