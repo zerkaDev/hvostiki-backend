@@ -1,6 +1,7 @@
 import random
 import logging
 from collections import defaultdict
+import jwt
 from django.conf import settings
 from django.utils.dateparse import parse_date
 from django.utils import timezone
@@ -11,6 +12,8 @@ from rest_framework.exceptions import MethodNotAllowed, ValidationError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.settings import api_settings
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import extend_schema_view
 
@@ -137,12 +140,36 @@ class RegisterDeviceView(APIView):
         return Response({'detail': 'Токен успешно зарегистрирован'}, status=status.HTTP_200_OK)
 
 
+def _token_jti(raw_token: str) -> str | None:
+    """Возвращает ``jti`` токена без проверки подписи.
+
+    Нужен только для того, чтобы отличить повторный выход уже отозванным
+    токеном от действительно невалидного токена.
+    """
+    try:
+        payload = jwt.decode(raw_token, options={'verify_signature': False})
+    except Exception:
+        return None
+    return payload.get(api_settings.JTI_CLAIM)
+
+
+def _is_blacklisted(raw_token: str) -> bool:
+    """Проверяет, был ли токен уже отозван (logout)."""
+    jti = _token_jti(raw_token)
+    if not jti:
+        return False
+    return BlacklistedToken.objects.filter(token__jti=jti).exists()
+
+
 class LogoutView(APIView):
     """Revoke the refresh token that represents the current client session.
 
-    The refresh token must be supplied in the request body. Creating a new
-    token for the authenticated user and blacklisting that token would not
-    invalidate the token already stored by the client.
+    The refresh token must be supplied in the request body and must belong to
+    the authenticated user: creating a new token for the current user and
+    blacklisting it would not invalidate the token stored by the client.
+
+    The endpoint is idempotent: a repeated call with an already revoked token
+    is not an error, the desired state has already been reached.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -156,10 +183,20 @@ class LogoutView(APIView):
             )
 
         try:
-            RefreshToken(refresh_token).blacklist()
+            token = RefreshToken(refresh_token)
         except TokenError as e:
+            if _is_blacklisted(refresh_token):
+                # Повторный выход тем же токеном: цель уже достигнута.
+                return Response({'detail': 'Выход выполнен успешно'})
             return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
 
+        if str(token[api_settings.USER_ID_CLAIM]) != str(request.user.pk):
+            return Response(
+                {'detail': 'Refresh token does not belong to the current user'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        token.blacklist()
         return Response({'detail': 'Выход выполнен успешно'})
 
 

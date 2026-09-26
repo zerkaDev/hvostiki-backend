@@ -154,7 +154,14 @@ REFRESH_TOKEN_SCHEMA = extend_schema(
 LOGOUT_SCHEMA = extend_schema(
     tags=['Аутентификация'],
     summary='Выход из системы',
-    description='Отзывает переданный refresh token текущей сессии.',
+    description="""
+    Отзывает переданный refresh token текущей сессии.
+
+    **Важно:**
+    - Токен должен принадлежать текущему пользователю
+    - Повторный вызов с уже отозванным токеном возвращает 200 (идемпотентно)
+    - Ранее выданные access token продолжают работать до истечения срока (1 час)
+    """,
     request=RefreshTokenSerializer,
     responses={
         200: OpenApiResponse(
@@ -167,7 +174,11 @@ LOGOUT_SCHEMA = extend_schema(
         ),
         401: OpenApiResponse(
             response=ErrorResponseSerializer,
-            description='Refresh token неверен, просрочен или уже отозван',
+            description='Refresh token неверен или просрочен',
+        ),
+        403: OpenApiResponse(
+            response=ErrorResponseSerializer,
+            description='Refresh token принадлежит другому пользователю',
         ),
     },
 )

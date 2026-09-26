@@ -110,3 +110,44 @@ class TestAuth:
         response = auth_client.post(reverse('logout'), {}, format='json')
 
         assert response.status_code == 400
+
+    def test_logout_is_idempotent(self, auth_client, user):
+        refresh = RefreshToken.for_user(user)
+        url = reverse('logout')
+
+        first = auth_client.post(url, {'refresh': str(refresh)}, format='json')
+        second = auth_client.post(url, {'refresh': str(refresh)}, format='json')
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert second.data['detail'] == 'Выход выполнен успешно'
+
+    def test_logout_rejects_foreign_refresh_token(self, auth_client, api_client, user):
+        other_user = User.objects.create_user(phone_number='79005556677')
+        foreign_refresh = RefreshToken.for_user(other_user)
+
+        response = auth_client.post(
+            reverse('logout'),
+            {'refresh': str(foreign_refresh)},
+            format='json',
+        )
+
+        assert response.status_code == 403
+
+        # Чужой токен не должен быть отозван
+        api_client.force_authenticate(user=None)
+        still_valid = api_client.post(
+            reverse('token-refresh'),
+            {'refresh': str(foreign_refresh)},
+            format='json',
+        )
+        assert still_valid.status_code == 200
+
+    def test_logout_with_invalid_token_returns_401(self, auth_client):
+        response = auth_client.post(
+            reverse('logout'),
+            {'refresh': 'not-a-jwt'},
+            format='json',
+        )
+
+        assert response.status_code == 401
