@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'drf_spectacular',
 ]
 
@@ -117,8 +118,11 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    # Refresh tokens are reusable until they expire or are explicitly revoked
+    # by the logout endpoint. The refresh response returns the same token so the
+    # mobile client can persist one stable session credential.
     'ROTATE_REFRESH_TOKENS': False,
-    'BLACKLIST_AFTER_ROTATION': True,
+    'BLACKLIST_AFTER_ROTATION': False,
     'UPDATE_LAST_LOGIN': True,
 
     'ALGORITHM': 'HS256',
@@ -201,4 +205,3 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 from pillow_heif import register_heif_opener
 register_heif_opener()
-

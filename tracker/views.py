@@ -90,7 +90,12 @@ class VerifyCodeView(APIView):
 
 
 class RefreshTokenView(APIView):
-    """Обновление access token"""
+    """Issue a new access token from a valid, non-revoked refresh token.
+
+    Refresh-token rotation is disabled in ``SIMPLE_JWT``. Consequently, the
+    submitted refresh token is returned unchanged and remains valid until its
+    original expiration time or until it is revoked by ``LogoutView``.
+    """
     permission_classes = [permissions.AllowAny]
 
     @schemas.REFRESH_TOKEN_SCHEMA
@@ -101,27 +106,40 @@ class RefreshTokenView(APIView):
 
         try:
             refresh = RefreshToken(refresh_token)
-            new_refresh = RefreshToken.for_user(refresh.user)
+            access = refresh.access_token
             return Response({
-                'refresh': str(new_refresh),
-                'access': str(new_refresh.access_token),
-                'access_expires': new_refresh.access_token.payload['exp'],
-                'refresh_expires': new_refresh.payload['exp']
+                'refresh': str(refresh),
+                'access': str(access),
+                'access_expires': access.payload['exp'],
+                'refresh_expires': refresh.payload['exp']
             })
-        except (TokenError, Exception) as e:
+        except TokenError as e:
             return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 class LogoutView(APIView):
-    """Выход из системы"""
+    """Revoke the refresh token that represents the current client session.
+
+    The refresh token must be supplied in the request body. Creating a new
+    token for the authenticated user and blacklisting that token would not
+    invalidate the token already stored by the client.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     @schemas.LOGOUT_SCHEMA
     def post(self, request):
+        refresh_token = request.data.get('refresh')
+        if not refresh_token:
+            return Response(
+                {'detail': 'Refresh token is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
-            RefreshToken.for_user(request.user).blacklist()
-        except Exception:
-            pass
+            RefreshToken(refresh_token).blacklist()
+        except TokenError as e:
+            return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
+
         return Response({'detail': 'Выход выполнен успешно'})
 
 
