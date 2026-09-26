@@ -1,4 +1,6 @@
+import logging
 import os
+
 try:
     import firebase_admin
     from firebase_admin import credentials, messaging
@@ -7,6 +9,8 @@ except ImportError:
     HAS_FIREBASE = False
 
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 class FirebaseService:
     _instance = None
@@ -28,13 +32,13 @@ class FirebaseService:
                 firebase_admin.initialize_app(cred)
                 self._initialized = True
             except Exception as e:
-                print(f"Error initializing Firebase: {e}")
+                logger.error('Error initializing Firebase: %s', e)
         else:
-            print(f"Firebase key not found at {key_path}")
+            logger.warning('Firebase key not found at %s, push-уведомления отключены', key_path)
 
     def send_push_notification(self, token, title, body, data=None):
         if not self._initialized or not HAS_FIREBASE:
-            print("Firebase not initialized or library missing. Cannot send push.")
+            logger.warning('Firebase not initialized or library missing. Cannot send push.')
             return None
 
         message = messaging.Message(
@@ -50,7 +54,7 @@ class FirebaseService:
             response = messaging.send(message)
             return response
         except Exception as e:
-            print(f"Error sending Firebase message: {e}")
+            logger.error('Error sending Firebase message: %s', e)
             return None
 
 firebase_service = FirebaseService()

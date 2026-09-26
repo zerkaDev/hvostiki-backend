@@ -209,19 +209,6 @@ class Pet(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    @property
-    def age_with_label(self):
-        """Возвращает возраст с правильным окончанием"""
-        if 10 <= self.age % 100 <= 20:
-            years_label = 'лет'
-        elif self.age % 10 == 1:
-            years_label = 'год'
-        elif 2 <= self.age % 10 <= 4:
-            years_label = 'года'
-        else:
-            years_label = 'лет'
-        return f'{self.age} {years_label}'
-
     def __str__(self):
         return f'{self.get_pet_type_display()} {self.name}'
 
