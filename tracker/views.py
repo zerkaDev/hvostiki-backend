@@ -1,6 +1,7 @@
 import random
 import logging
 from collections import defaultdict
+from datetime import timedelta
 import jwt
 from django.conf import settings
 from django.utils.dateparse import parse_date
@@ -28,6 +29,38 @@ from tracker.utils import generate_occurrences
 from tracker import schemas
 
 logger = logging.getLogger(__name__)
+
+# Окно «ближайших событий» по умолчанию (в днях) и допустимый максимум
+DEFAULT_UPCOMING_DAYS = 14
+MAX_UPCOMING_DAYS = 60
+
+
+def group_occurrences(events, date_from, date_to, serializer_class, serializer_context=None):
+    """Разворачивает события в вхождения и группирует их по датам.
+
+    Возвращает словарь вида ``{'2026-09-30': [событие, ...]}``: ключи
+    отсортированы по дате, внутри даты события отсортированы по времени.
+    Используется и в ``/event_schedule/period/``, и в ``/pets/{id}/upcoming/``.
+    """
+    base_context = dict(serializer_context or {})
+    grouped = defaultdict(list)
+
+    for event in events:
+        for occurrence in generate_occurrences(event, date_from, date_to):
+            serializer = serializer_class(
+                event,
+                context={**base_context, 'occurrence_date': occurrence},
+            )
+            data = dict(serializer.data)
+            # Дата конкретного вхождения, а не start_date события
+            data['start_date'] = occurrence.isoformat()
+            grouped[data['start_date']].append(data)
+
+    for items in grouped.values():
+        items.sort(key=lambda item: item.get('time') or '')
+
+    return {date_key: grouped[date_key] for date_key in sorted(grouped)}
+
 
 # --- Authentication Views ---
 
@@ -242,6 +275,46 @@ class PetViewSet(viewsets.ModelViewSet):
         full_data = PetSerializer(serializer.instance, context={'request': request}).data
         return Response(full_data, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['get'])
+    def upcoming(self, request, pk=None):
+        """Ближайшие события питомца (по умолчанию на 14 дней)"""
+        pet = self.get_object()  # 404, если питомец не принадлежит пользователю
+
+        raw_days = request.query_params.get('days', DEFAULT_UPCOMING_DAYS)
+        try:
+            days = int(raw_days)
+        except (TypeError, ValueError):
+            return Response(
+                {'detail': 'days must be an integer'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not 1 <= days <= MAX_UPCOMING_DAYS:
+            return Response(
+                {'detail': f'days must be between 1 and {MAX_UPCOMING_DAYS}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Клиент может передать своё «сегодня» (локальная дата), иначе берём дату сервера
+        date_from = parse_date(request.query_params.get('date_from') or '') or timezone.localdate()
+        date_to = date_from + timedelta(days=days)
+
+        events = (
+            Event.objects
+            .filter(user=request.user, pet=pet)
+            .select_related('recurrence', 'pet', 'pet__breed')
+        )
+
+        return Response(
+            group_occurrences(
+                events,
+                date_from,
+                date_to,
+                EventSerializer,
+                self.get_serializer_context(),
+            )
+        )
+
 
 class BreedListAPIView(generics.ListAPIView):
     """Список пород по типу животного"""
@@ -269,7 +342,11 @@ class EventViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         pet_id = self.request.query_params.get('pet_id')
-        queryset = Event.objects.filter(user=self.request.user).select_related('recurrence')
+        queryset = (
+            Event.objects
+            .filter(user=self.request.user)
+            .select_related('recurrence', 'pet', 'pet__breed')
+        )
         if pet_id:
             queryset = queryset.filter(pet_id=pet_id)
         return queryset
@@ -286,29 +363,16 @@ class EventViewSet(viewsets.ModelViewSet):
         if not date_from or not date_to:
             return Response({'detail': 'date_from and date_to are required'}, status=400)
 
-        events = self.get_queryset()
-        grouped_result = defaultdict(list)
+        return Response(
+            group_occurrences(
+                self.get_queryset(),
+                date_from,
+                date_to,
+                self.get_serializer_class(),
+                self.get_serializer_context(),
+            )
+        )
 
-        for event in events:
-            for d in generate_occurrences(event, date_from, date_to):
-                serializer = self.get_serializer(event, context={'request': request, 'occurrence_date': d})
-                data = dict(serializer.data)
-                
-                # Обновляем дату начала для конкретного вхождения
-                data['start_date'] = d.isoformat()
-                
-                date_key = data['start_date']
-                grouped_result[date_key].append(data)
-
-        # Сортируем события внутри каждой даты по времени
-        for date_key in grouped_result:
-            grouped_result[date_key].sort(key=lambda x: x.get('time') or '')
-
-        # Возвращаем словарь, отсортированный по ключам-датам
-        sorted_keys = sorted(grouped_result.keys())
-        final_result = {key: grouped_result[key] for key in sorted_keys}
-
-        return Response(final_result)
 
     @action(detail=True, methods=['post'])
     def mark_done(self, request, pk=None):

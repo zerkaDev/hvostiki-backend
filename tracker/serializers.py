@@ -98,6 +98,8 @@ class PetSerializer(serializers.ModelSerializer):
     owner_id = serializers.ReadOnlyField(source='owner.id')
     # Используем PrimaryKeyRelatedField для записи и BreedSerializer для чтения (через to_representation)
     breed = serializers.PrimaryKeyRelatedField(queryset=Breed.objects.all())
+    # coerce_to_string=False: отдаём вес числом (25.5), а не строкой "25.50"
+    weight = serializers.DecimalField(max_digits=5, decimal_places=2, coerce_to_string=False)
 
     class Meta:
         model = Pet

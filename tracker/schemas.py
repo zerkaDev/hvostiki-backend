@@ -206,7 +206,7 @@ PET_VIEWSET_SCHEMAS = {
                     'name': 'Барсик',
                     'pet_type': 'cat',
                     'breed': 1,
-                    'weight': '4.50',
+                    'weight': 4.5,
                     'birthday': '2024-01-15',
                     'color': 'Grey',
                     'image': None,
@@ -242,6 +242,67 @@ PET_VIEWSET_SCHEMAS = {
         summary='Удалить питомца',
         tags=['pets'],
         responses={204: None}
+    ),
+    'upcoming': extend_schema(
+        summary='Ближайшие события питомца',
+        description="""
+            Возвращает события конкретного питомца на ближайшие `days` дней,
+            сгруппированные по датам (тот же формат, что у `/event_schedule/period/`):
+            ключ — дата в формате YYYY-MM-DD, значение — список событий этой даты.
+
+            **Параметры:**
+            - `days` — окно в днях, по умолчанию 14, максимум 60
+            - `date_from` — с какой даты считать (локальная дата клиента), по умолчанию — сегодняшняя дата сервера
+
+            **Важно:**
+            - Учитываются повторяющиеся события: в ответе дата конкретного вхождения
+            - Поле `done` считается для каждой даты отдельно
+            - Чужой питомец возвращает 404
+            """,
+        parameters=[
+            OpenApiParameter(
+                name='days',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Окно в днях (1..60), по умолчанию 14',
+            ),
+            OpenApiParameter(
+                name='date_from',
+                type=OpenApiTypes.DATE,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Дата начала (YYYY-MM-DD), по умолчанию — сегодня',
+            ),
+        ],
+        responses={
+            200: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description='События питомца, сгруппированные по датам',
+                examples=[
+                    OpenApiExample(
+                        'Пример ответа',
+                        value={
+                            '2026-09-30': [
+                                {'id': 'uuid', 'title': 'Дать таблетку', 'time': '08:00', 'done': False},
+                            ],
+                            '2026-10-02': [
+                                {'id': 'uuid', 'title': 'Визит к ветеринару', 'time': '10:00', 'done': False},
+                            ],
+                        },
+                    )
+                ],
+            ),
+            400: OpenApiResponse(
+                response=ErrorResponseSerializer,
+                description='Некорректный параметр days',
+            ),
+            404: OpenApiResponse(
+                response=ErrorResponseSerializer,
+                description='Питомец не найден или принадлежит другому пользователю',
+            ),
+        },
+        tags=['pets'],
     ),
 }
 

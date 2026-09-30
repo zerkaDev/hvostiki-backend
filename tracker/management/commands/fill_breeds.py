@@ -2,7 +2,12 @@ from django.core.management.base import BaseCommand
 
 from tracker.models import Breed, PetType
 
+# Вариант для тех, кто не знает породу (метис/дворняжка).
+# Есть в списке и собак, и кошек — клиент выбирает породу по типу питомца.
+MIXED_BREED = 'Метис или не знаю'
+
 DOG_BREEDS = [
+    MIXED_BREED,
     'Алабай', 'Акита-ину', 'Американский бульдог', 'Английский бульдог',
     'Басенджи', 'Бигль', 'Бладхаунд', 'Боксер', 'Бордер-колли',
     'Бультерьер', 'Веймаранер', 'Вельш-корги', 'Далматин',
@@ -16,6 +21,7 @@ DOG_BREEDS = [
 ]
 
 CAT_BREEDS = [
+    MIXED_BREED,
     'Абиссинская', 'Австралийский мист', 'Азиатская',
     'Балинезийская', 'Бенгальская', 'Бомбейская',
     'Британская короткошерстная', 'Бурманская',
@@ -31,27 +37,21 @@ CAT_BREEDS = [
 
 
 class Command(BaseCommand):
-    help = 'Заполняет таблицу Breed (~500 собак, ~300 кошек)'
+    help = 'Заполняет таблицу Breed породами собак и кошек (команду можно запускать повторно)'
 
     def handle(self, *args, **options):
-        breeds_to_create = []
+        # bulk_create не проверяет дубликаты, поэтому сначала исключаем то,
+        # что уже есть в базе — иначе повторный запуск размножит породы.
+        existing = set(Breed.objects.values_list('name', 'type'))
 
-        # ===== DOGS =====
-        for name in DOG_BREEDS:
-            breeds_to_create.append(
-                Breed(
-                    name=name,
-                    type=PetType.DOG
-                )
-            )
-
-        # ===== CATS =====
-        for name in CAT_BREEDS:
-            breeds_to_create.append(
-                Breed(
-                    name=name,
-                    type=PetType.CAT
-                )
-            )
+        breeds_to_create = [
+            Breed(name=name, type=pet_type)
+            for pet_type, names in ((PetType.DOG, DOG_BREEDS), (PetType.CAT, CAT_BREEDS))
+            for name in names
+            if (name, pet_type) not in existing
+        ]
 
         Breed.objects.bulk_create(breeds_to_create)
+
+        self.stdout.write(f'Добавлено пород: {len(breeds_to_create)} (уже было: {len(existing)})')
+
