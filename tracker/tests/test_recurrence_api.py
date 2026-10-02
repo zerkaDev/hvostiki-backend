@@ -7,7 +7,6 @@ from django.urls import reverse
 from tracker.models import Event, RecurrenceRule
 
 URL = '/event_schedule/'
-HEADERS = {'HTTP_X_TIME_CONTRACT': 'utc'}
 
 
 def _payload(pet, recurrence, start='2026-10-05', **extra):
@@ -20,7 +19,7 @@ def _payload(pet, recurrence, start='2026-10-05', **extra):
 
 
 def _post(client, pet, recurrence, **kw):
-    return client.post(URL, _payload(pet, recurrence, **kw), format='json', **HEADERS)
+    return client.post(URL, _payload(pet, recurrence, **kw), format='json')
 
 
 @pytest.mark.django_db
@@ -93,33 +92,33 @@ class TestUpdate:
         eid = self._create(auth_client, pet, {'frequency': 'weekly', 'week_days': [1]})
         r = auth_client.patch(f'/event_schedule/{eid}/', {
             'recurrence': {'frequency': 'monthly', 'month_days': [-1]},
-        }, format='json', **HEADERS)
+        }, format='json')
         assert r.status_code == 200, r.data
         rule = Event.objects.get(pk=eid).recurrence
         assert rule.week_days is None and rule.month_days == [-1]
 
     def test_patch_end_count_replaces_end_date(self, auth_client, pet):
         eid = self._create(auth_client, pet, {'frequency': 'daily', 'end_date': '2026-10-20'})
-        r = auth_client.patch(f'/event_schedule/{eid}/', {'recurrence': {'end_count': 4}}, format='json', **HEADERS)
+        r = auth_client.patch(f'/event_schedule/{eid}/', {'recurrence': {'end_count': 4}}, format='json')
         assert r.status_code == 200, r.data
         rule = Event.objects.get(pk=eid).recurrence
         assert rule.end_date is None and rule.until == datetime.date(2026, 10, 8)
 
     def test_patch_start_date_recomputes_until(self, auth_client, pet):
         eid = self._create(auth_client, pet, {'frequency': 'daily', 'end_count': 3})
-        r = auth_client.patch(f'/event_schedule/{eid}/', {'start_date': '2026-11-01'}, format='json', **HEADERS)
+        r = auth_client.patch(f'/event_schedule/{eid}/', {'start_date': '2026-11-01'}, format='json')
         assert r.status_code == 200, r.data
         assert Event.objects.get(pk=eid).recurrence.until == datetime.date(2026, 11, 3)
 
     def test_patch_start_date_after_end_date_rejected(self, auth_client, pet):
         eid = self._create(auth_client, pet, {'frequency': 'daily', 'end_date': '2026-10-20'})
-        r = auth_client.patch(f'/event_schedule/{eid}/', {'start_date': '2026-11-01'}, format='json', **HEADERS)
+        r = auth_client.patch(f'/event_schedule/{eid}/', {'start_date': '2026-11-01'}, format='json')
         assert r.status_code == 400
         assert Event.objects.get(pk=eid).start_date == datetime.date(2026, 10, 5)
 
     def test_patch_clear_end(self, auth_client, pet):
         eid = self._create(auth_client, pet, {'frequency': 'daily', 'end_count': 3})
-        r = auth_client.patch(f'/event_schedule/{eid}/', {'recurrence': {'end_type': 'never'}}, format='json', **HEADERS)
+        r = auth_client.patch(f'/event_schedule/{eid}/', {'recurrence': {'end_type': 'never'}}, format='json')
         assert r.status_code == 200, r.data
         rule = Event.objects.get(pk=eid).recurrence
         assert rule.end_count is None and rule.until is None
@@ -130,39 +129,39 @@ class TestPeriodLimits:
     PERIOD = '/event_schedule/period/'
 
     def test_date_from_after_date_to(self, auth_client):
-        r = auth_client.get(self.PERIOD, {'date_from': '2026-10-10', 'date_to': '2026-10-01'}, **HEADERS)
+        r = auth_client.get(self.PERIOD, {'date_from': '2026-10-10', 'date_to': '2026-10-01'})
         assert r.status_code == 400
 
     def test_window_too_long(self, auth_client):
-        r = auth_client.get(self.PERIOD, {'date_from': '2026-01-01', 'date_to': '2027-03-01'}, **HEADERS)
+        r = auth_client.get(self.PERIOD, {'date_from': '2026-01-01', 'date_to': '2027-03-01'})
         assert r.status_code == 400
 
     def test_window_400_days_ok(self, auth_client):
-        r = auth_client.get(self.PERIOD, {'date_from': '2026-01-01', 'date_to': '2027-02-05'}, **HEADERS)
+        r = auth_client.get(self.PERIOD, {'date_from': '2026-01-01', 'date_to': '2027-02-05'})
         assert r.status_code == 200
 
     def test_occurrence_limit(self, auth_client, pet, monkeypatch):
         from tracker import views
         monkeypatch.setattr(views, 'MAX_OCCURRENCES_PER_RESPONSE', 5)
         assert _post(auth_client, pet, {'frequency': 'daily'}).status_code == 201
-        r = auth_client.get(self.PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-20'}, **HEADERS)
+        r = auth_client.get(self.PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-20'})
         assert r.status_code == 400 and 'detail' in r.data
 
     def test_queries_do_not_grow_with_occurrences(self, auth_client, pet, django_assert_max_num_queries):
         assert _post(auth_client, pet, {'frequency': 'daily'}).status_code == 201
         with django_assert_max_num_queries(8):
-            r = auth_client.get(self.PERIOD, {'date_from': '2026-10-05', 'date_to': '2027-02-05'}, **HEADERS)
+            r = auth_client.get(self.PERIOD, {'date_from': '2026-10-05', 'date_to': '2027-02-05'})
         assert r.status_code == 200 and len(r.data) == 124
 
     def test_done_flag_from_prefetch(self, auth_client, pet):
         eid = _post(auth_client, pet, {'frequency': 'daily'}).data['id']
-        auth_client.post(f'/event_schedule/{eid}/mark_done/', {'date': '2026-10-06'}, format='json', **HEADERS)
-        r = auth_client.get(self.PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-07'}, **HEADERS)
+        auth_client.post(f'/event_schedule/{eid}/mark_done/', {'date': '2026-10-06'}, format='json')
+        r = auth_client.get(self.PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-07'})
         assert [r.data[d][0]['done'] for d in sorted(r.data)] == [False, True, False]
 
     def test_expired_rule_excluded(self, auth_client, pet):
         _post(auth_client, pet, {'frequency': 'daily', 'end_date': '2026-10-08'})
-        r = auth_client.get(self.PERIOD, {'date_from': '2026-10-09', 'date_to': '2026-10-20'}, **HEADERS)
+        r = auth_client.get(self.PERIOD, {'date_from': '2026-10-09', 'date_to': '2026-10-20'})
         assert r.status_code == 200 and r.data == {}
 
 
@@ -171,11 +170,11 @@ class TestPetObj:
     def test_lists_have_no_pet_obj_but_single_responses_do(self, auth_client, pet):
         created = _post(auth_client, pet, {'frequency': 'daily'})
         assert 'pet_obj' in created.data
-        period = auth_client.get('/event_schedule/period/', {'date_from': '2026-10-05', 'date_to': '2026-10-06'}, **HEADERS)
+        period = auth_client.get('/event_schedule/period/', {'date_from': '2026-10-05', 'date_to': '2026-10-06'})
         assert all('pet_obj' not in item for items in period.data.values() for item in items)
         assert period.data['2026-10-05'][0]['pet'] == pet.id
-        upcoming = auth_client.get(f'/pets/{pet.id}/upcoming/', {'date_from': '2026-10-05'}, **HEADERS)
+        upcoming = auth_client.get(f'/pets/{pet.id}/upcoming/', {'date_from': '2026-10-05'})
         assert upcoming.status_code == 200
         assert all('pet_obj' not in item for items in upcoming.data.values() for item in items)
-        detail = auth_client.get(f"/event_schedule/{created.data['id']}/", **HEADERS)
+        detail = auth_client.get(f"/event_schedule/{created.data['id']}/")
         assert 'pet_obj' in detail.data

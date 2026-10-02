@@ -10,11 +10,10 @@ from tracker.models import Event, EventCompletion, EventNotificationLog, FCMDevi
 from tracker.tasks import send_event_notifications
 
 URL = '/event_schedule/'
-UTC = {'HTTP_X_TIME_CONTRACT': 'utc'}
 PERIOD = '/event_schedule/period/'
 
 
-def _post(client, pet, times, time_='05:00', headers=UTC, rule=None, **extra):
+def _post(client, pet, times, time_='05:00', rule=None, **extra):
     recurrence = {'frequency': 'daily', 'times': times}
     recurrence.update(rule or {})
     payload = {
@@ -22,7 +21,7 @@ def _post(client, pet, times, time_='05:00', headers=UTC, rule=None, **extra):
         'timezone_offset': 180, 'is_recurring': True, 'type': 'custom', 'recurrence': recurrence,
     }
     payload.update(extra)
-    return client.post(URL, payload, format='json', **headers)
+    return client.post(URL, payload, format='json')
 
 
 @pytest.mark.django_db
@@ -36,12 +35,6 @@ class TestWrite:
         assert event.time == time(8, 0)  # первый слот
         assert r.data['recurrence']['times'] == ['05:00', '11:00']  # на проводе — UTC
         assert r.data['time'] == '05:00:00'
-
-    def test_legacy_mode_keeps_local(self, auth_client, pet):
-        r = _post(auth_client, pet, ['08:00', '14:00'], time_='08:00', headers={})
-        assert r.status_code == 201, r.data
-        assert Event.objects.get().recurrence.times == ['08:00', '14:00']
-        assert r.data['recurrence']['times'] == ['08:00', '14:00']
 
     def test_single_slot_collapses_to_event_time(self, auth_client, pet):
         r = _post(auth_client, pet, ['11:00'], time_='05:00')
@@ -66,16 +59,16 @@ class TestWrite:
 
     def test_patch_time_conflicting_with_times(self, auth_client, pet):
         eid = _post(auth_client, pet, ['05:00', '11:00']).data['id']
-        r = auth_client.patch(f'{URL}{eid}/', {'time': '07:00'}, format='json', **UTC)
+        r = auth_client.patch(f'{URL}{eid}/', {'time': '07:00'}, format='json')
         assert r.status_code == 400
         assert r.data['time'][0].code == 'time_conflicts_with_times'
 
     def test_patch_times_replaces_and_switching_frequency_clears(self, auth_client, pet):
         eid = _post(auth_client, pet, ['05:00', '11:00']).data['id']
-        r = auth_client.patch(f'{URL}{eid}/', {'recurrence': {'times': ['06:00', '12:00', '18:00']}}, format='json', **UTC)
+        r = auth_client.patch(f'{URL}{eid}/', {'recurrence': {'times': ['06:00', '12:00', '18:00']}}, format='json')
         assert r.status_code == 200, r.data
         assert Event.objects.get().recurrence.times == ['09:00', '15:00', '21:00']
-        r = auth_client.patch(f'{URL}{eid}/', {'recurrence': {'frequency': 'weekly', 'week_days': [2]}}, format='json', **UTC)
+        r = auth_client.patch(f'{URL}{eid}/', {'recurrence': {'frequency': 'weekly', 'week_days': [2]}}, format='json')
         assert r.status_code == 200, r.data
         assert Event.objects.get().recurrence.times is None
 
@@ -84,8 +77,8 @@ class TestWrite:
 class TestPeriod:
     def test_one_record_per_slot_sorted_with_done_by_slot(self, auth_client, pet):
         eid = _post(auth_client, pet, ['05:00', '11:00', '17:00']).data['id']
-        auth_client.post(f'{URL}{eid}/mark_done/', {'date': '2026-10-05', 'time': '11:00'}, format='json', **UTC)
-        r = auth_client.get(PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-06'}, **UTC)
+        auth_client.post(f'{URL}{eid}/mark_done/', {'date': '2026-10-05', 'time': '11:00'}, format='json')
+        r = auth_client.get(PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-06'})
         day = r.data['2026-10-05']
         assert [e['time'] for e in day] == ['05:00:00', '11:00:00', '17:00:00']
         assert [e['done'] for e in day] == [False, True, False]
@@ -97,19 +90,19 @@ class TestPeriod:
         from tracker import views
         monkeypatch.setattr(views, 'MAX_OCCURRENCES_PER_RESPONSE', 5)
         _post(auth_client, pet, ['05:00', '11:00', '17:00'])
-        r = auth_client.get(PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-06'}, **UTC)
+        r = auth_client.get(PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-06'})
         assert r.status_code == 400
 
     def test_midnight_crossing_sorted_by_local_moment(self, auth_client, pet):
         # локально 00:30 и 23:30 (offset +3) → UTC 21:30 и 20:30; порядок в дне — по локальному времени
         _post(auth_client, pet, ['21:30', '20:30'], time_='21:30')
-        r = auth_client.get(PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-05'}, **UTC)
+        r = auth_client.get(PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-05'})
         assert [e['time'] for e in r.data['2026-10-05']] == ['21:30:00', '20:30:00']
 
     def test_queries_do_not_grow_with_slots(self, auth_client, pet, django_assert_max_num_queries):
         _post(auth_client, pet, ['05:00', '11:00', '17:00'])
         with django_assert_max_num_queries(8):
-            r = auth_client.get(PERIOD, {'date_from': '2026-10-05', 'date_to': '2027-02-05'}, **UTC)
+            r = auth_client.get(PERIOD, {'date_from': '2026-10-05', 'date_to': '2027-02-05'})
         assert r.status_code == 200 and sum(len(v) for v in r.data.values()) == 124 * 3
 
 
@@ -120,36 +113,36 @@ class TestMarkDone:
 
     def test_time_required_for_multi_slot(self, auth_client, pet):
         eid = self._event(auth_client, pet)
-        r = auth_client.post(f'{URL}{eid}/mark_done/', {'date': '2026-10-05'}, format='json', **UTC)
+        r = auth_client.post(f'{URL}{eid}/mark_done/', {'date': '2026-10-05'}, format='json')
         assert r.status_code == 400 and 'detail' in r.data
 
     def test_unknown_slot(self, auth_client, pet):
         eid = self._event(auth_client, pet)
-        r = auth_client.post(f'{URL}{eid}/mark_done/', {'date': '2026-10-05', 'time': '07:00'}, format='json', **UTC)
+        r = auth_client.post(f'{URL}{eid}/mark_done/', {'date': '2026-10-05', 'time': '07:00'}, format='json')
         assert r.status_code == 400
 
     def test_done_and_undone_one_slot_keeps_other(self, auth_client, pet):
         eid = self._event(auth_client, pet)
         for t in ('05:00', '11:00'):
-            assert auth_client.post(f'{URL}{eid}/mark_done/', {'date': '2026-10-05', 'time': t}, format='json', **UTC).status_code == 200
-        auth_client.post(f'{URL}{eid}/mark_undone/', {'date': '2026-10-05', 'time': '05:00'}, format='json', **UTC)
+            assert auth_client.post(f'{URL}{eid}/mark_done/', {'date': '2026-10-05', 'time': t}, format='json').status_code == 200
+        auth_client.post(f'{URL}{eid}/mark_undone/', {'date': '2026-10-05', 'time': '05:00'}, format='json')
         assert list(EventCompletion.objects.values_list('occurrence_time', flat=True)) == [time(14, 0)]
 
     def test_idempotent(self, auth_client, pet):
         eid = self._event(auth_client, pet)
         for _ in range(2):
-            auth_client.post(f'{URL}{eid}/mark_done/', {'date': '2026-10-05', 'time': '05:00'}, format='json', **UTC)
+            auth_client.post(f'{URL}{eid}/mark_done/', {'date': '2026-10-05', 'time': '05:00'}, format='json')
         assert EventCompletion.objects.count() == 1
 
     def test_legacy_completion_counts_for_first_slot(self, auth_client, pet):
         eid = self._event(auth_client, pet)
         EventCompletion.objects.create(event_id=eid, occurrence_date=date(2026, 10, 5))  # старая отметка, NULL
-        r = auth_client.get(PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-05'}, **UTC)
+        r = auth_client.get(PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-05'})
         assert [e['done'] for e in r.data['2026-10-05']] == [True, False]
 
     def test_single_slot_unchanged(self, auth_client, pet, user):
         eid = _post(auth_client, pet, None).data['id']
-        r = auth_client.post(f'{URL}{eid}/mark_done/', {'date': '2026-10-05'}, format='json', **UTC)
+        r = auth_client.post(f'{URL}{eid}/mark_done/', {'date': '2026-10-05'}, format='json')
         assert r.status_code == 200
         assert EventCompletion.objects.get().occurrence_time is None
 

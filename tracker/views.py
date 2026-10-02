@@ -27,7 +27,7 @@ from tracker.serializers import (
 )
 from tracker.tasks import send_confirmation_code
 from tracker.recurrence import event_slots
-from tracker.time_contract import get_time_contract, time_to_stored
+from tracker.event_time import time_to_stored
 from tracker.utils import generate_occurrences
 from tracker import schemas
 
@@ -475,7 +475,7 @@ class EventViewSet(viewsets.ModelViewSet):
         parsed = parse_time(str(raw_time))
         if parsed is None:
             return None, None, Response({'detail': 'time has invalid format'}, status=400)
-        slot = time_to_stored(parsed, event.timezone_offset, get_time_contract(request)).replace(second=0, microsecond=0)
+        slot = time_to_stored(parsed, event.timezone_offset).replace(second=0, microsecond=0)
         if slot not in slots:
             return None, None, Response({'detail': 'time does not match any slot of the event'}, status=400)
         return occurrence_date, slot, None

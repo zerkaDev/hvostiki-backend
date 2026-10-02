@@ -10,7 +10,7 @@ from tracker.recurrence import (
 )
 from tracker.models import User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
 
-from .time_contract import get_time_contract, time_to_stored, time_to_wire
+from .event_time import time_to_stored, time_to_wire
 from .utils import normalize_phone
 
 
@@ -170,7 +170,7 @@ class DeviceRegistrationSerializer(serializers.Serializer):
 class RecurrenceRuleSerializer(serializers.ModelSerializer):
     # Вычисляется из end_date / end_count; на вход можно передать явно (never/date/count)
     end_type = serializers.ChoiceField(choices=END_TYPES, required=False)
-    # «HH:MM»; на проводе — по контракту времени (utc/legacy), в БД — локальное время события
+    # «HH:MM»; на проводе — UTC, в БД — локальное время события
     times = serializers.ListField(
         child=serializers.TimeField(), required=False, allow_null=True, allow_empty=True,
     )
@@ -265,7 +265,7 @@ class EventSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         # В базе время всегда локальное (UTC + timezone_offset). Что присылает клиент —
-        # зависит от режима контракта (X-Time-Contract): utc → переводим, legacy → уже локальное.
+        # API принимает время в UTC — переводим в локальное.
         if self.instance is None and data.get('timezone_offset') is None:
             raise serializers.ValidationError(
                 {'timezone_offset': 'timezone_offset is required (minutes offset relative to UTC).'}
@@ -276,8 +276,7 @@ class EventSerializer(serializers.ModelSerializer):
             effective_offset = self.instance.timezone_offset
 
         if effective_offset is not None and 'time' in data and data['time'] is not None:
-            contract = get_time_contract(self.context.get('request'))
-            data['time'] = time_to_stored(data['time'], effective_offset, contract)
+            data['time'] = time_to_stored(data['time'], effective_offset)
 
         is_recurring = data.get('is_recurring', self.instance.is_recurring if self.instance else False)
         recurrence = data.get('recurrence')
@@ -327,8 +326,7 @@ class EventSerializer(serializers.ModelSerializer):
         """Слоты времени: в БД — локальные; ``Event.time`` согласуется с первым слотом."""
         from_patch = patch.get('times') is not None
         if from_patch:
-            contract = get_time_contract(self.context.get('request'))
-            raw = [time_to_stored(t, offset, contract) for t in patch['times']]
+            raw = [time_to_stored(t, offset) for t in patch['times']]
         elif current is not None:
             raw = parse_stored_times(current.times)
         else:
@@ -350,15 +348,14 @@ class EventSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         rep = super().to_representation(instance)
 
-        # utc → отдаём время в UTC+0; legacy → локальное, как хранится.
+        # Отдаём время в UTC+0.
         # В списках вхождение может относиться к слоту (несколько времён в день) — его время в контексте.
-        contract = get_time_contract(self.context.get('request'))
         shown_time = self.context.get('slot_time', instance.time)
         if shown_time is not None:
-            rep['time'] = time_to_wire(shown_time, instance.timezone_offset, contract).isoformat()
+            rep['time'] = time_to_wire(shown_time, instance.timezone_offset).isoformat()
         if rep.get('recurrence') and instance.recurrence and instance.recurrence.times:
             rep['recurrence']['times'] = [
-                time_to_wire(t, instance.timezone_offset, contract).strftime('%H:%M')
+                time_to_wire(t, instance.timezone_offset).strftime('%H:%M')
                 for t in parse_stored_times(instance.recurrence.times)
             ]
 
