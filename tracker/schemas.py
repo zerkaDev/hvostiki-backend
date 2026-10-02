@@ -10,6 +10,20 @@ from tracker.serializers import (
     DeviceRegistrationSerializer, UserSerializer
 )
 
+# Заголовок контракта времени (см. tracker/time_contract.py и AGENTS.md, п.3)
+TIME_CONTRACT_PARAMETER = OpenApiParameter(
+    name='X-Time-Contract',
+    type=OpenApiTypes.STR,
+    location=OpenApiParameter.HEADER,
+    required=False,
+    enum=['utc'],
+    description=(
+        '`utc` — поле `time` в запросе и ответе в UTC (сервер хранит локальное время события: '
+        '`UTC + timezone_offset`). Без заголовка (legacy) — `time` локальное, как его видит пользователь, '
+        'сдвиг не применяется. Применённый режим возвращается в одноимённом заголовке ответа.'
+    ),
+)
+
 # --- Authentication ---
 
 REGISTER_DEVICE_SCHEMA = extend_schema(
@@ -258,8 +272,10 @@ PET_VIEWSET_SCHEMAS = {
             - Учитываются повторяющиеся события: в ответе дата конкретного вхождения
             - Поле `done` считается для каждой даты отдельно
             - Чужой питомец возвращает 404
+            - Поле `time` зависит от заголовка `X-Time-Contract`
             """,
         parameters=[
+            TIME_CONTRACT_PARAMETER,
             OpenApiParameter(
                 name='days',
                 type=OpenApiTypes.INT,
@@ -334,9 +350,25 @@ BREED_LIST_SCHEMA = extend_schema(
 # --- Events ---
 
 EVENT_VIEWSET_SCHEMAS = {
+    'retrieve': extend_schema(
+        summary='Получить событие',
+        description='Поле `time` зависит от заголовка `X-Time-Contract`.',
+        parameters=[TIME_CONTRACT_PARAMETER],
+    ),
+    'update': extend_schema(
+        summary='Обновить событие',
+        description='Полное обновление. Формат `time` зависит от заголовка `X-Time-Contract`.',
+        parameters=[TIME_CONTRACT_PARAMETER],
+    ),
+    'partial_update': extend_schema(
+        summary='Частично обновить событие',
+        description='Формат `time` зависит от заголовка `X-Time-Contract`.',
+        parameters=[TIME_CONTRACT_PARAMETER],
+    ),
     'create': extend_schema(
         summary='Создать событие',
-        description='Создает одноразовое или повторяющееся событие',
+        description='Создает одноразовое или повторяющееся событие. Формат `time` зависит от заголовка `X-Time-Contract`.',
+        parameters=[TIME_CONTRACT_PARAMETER],
         request=EventSerializer,
         responses={201: EventSerializer},
         examples=[
@@ -369,6 +401,7 @@ EVENT_VIEWSET_SCHEMAS = {
             Словарь отсортирован по датам, события внутри даты — по времени.
             """,
         parameters=[
+            TIME_CONTRACT_PARAMETER,
             OpenApiParameter(name='date_from', type=OpenApiTypes.DATE, location=OpenApiParameter.QUERY, required=True),
             OpenApiParameter(name='date_to', type=OpenApiTypes.DATE, location=OpenApiParameter.QUERY, required=True),
             OpenApiParameter(name='pet_id', type=OpenApiTypes.INT, location=OpenApiParameter.QUERY, required=False),

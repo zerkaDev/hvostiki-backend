@@ -4,7 +4,8 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from tracker.models import User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
 
-from .utils import normalize_phone, shift_time_by_minutes
+from .time_contract import get_time_contract, time_to_stored, time_to_wire
+from .utils import normalize_phone
 
 
 class PhoneNumberSerializer(serializers.Serializer):
@@ -247,7 +248,8 @@ class EventSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, data):
-        # Клиент присылает time в UTC+0. В базе храним локальное время (UTC + timezone_offset)
+        # В базе время всегда локальное (UTC + timezone_offset). Что присылает клиент —
+        # зависит от режима контракта (X-Time-Contract): utc → переводим, legacy → уже локальное.
         if self.instance is None and data.get('timezone_offset') is None:
             raise serializers.ValidationError(
                 {'timezone_offset': 'timezone_offset is required (minutes offset relative to UTC).'}
@@ -258,7 +260,8 @@ class EventSerializer(serializers.ModelSerializer):
             effective_offset = self.instance.timezone_offset
 
         if effective_offset is not None and 'time' in data and data['time'] is not None:
-            data['time'] = shift_time_by_minutes(data['time'], effective_offset)
+            contract = get_time_contract(self.context.get('request'))
+            data['time'] = time_to_stored(data['time'], effective_offset, contract)
 
         is_recurring = data.get('is_recurring', self.instance.is_recurring if self.instance else False)
         recurrence = data.get('recurrence')
@@ -274,9 +277,10 @@ class EventSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         rep = super().to_representation(instance)
 
-        # Возвращаем time как UTC+0
+        # utc → отдаём время в UTC+0; legacy → локальное, как хранится
         if instance.time is not None:
-            rep['time'] = shift_time_by_minutes(instance.time, -instance.timezone_offset).isoformat()
+            contract = get_time_contract(self.context.get('request'))
+            rep['time'] = time_to_wire(instance.time, instance.timezone_offset, contract).isoformat()
         
         # Добавляем полный объект питомца для чтения
         rep['pet_obj'] = PetSerializer(instance.pet, context=self.context).data

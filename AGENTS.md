@@ -40,9 +40,11 @@ tracker/
                  flush_expired_tokens)
   services/      firebase_service.py (FCM), ucalles_service.py (звонки-коды)
   utils.py       generate_occurrences, shift_time_by_minutes, normalize_phone
+  time_contract.py  режимы контракта времени (utc/legacy), конвертация, учёт использования
+  middleware.py  TimeContractMiddleware (режим, заголовок ответа, лог для метрики)
   backends.py    PhoneBackend (вход в Django Admin по телефону)
-  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile
-  migrations/    0001..0016
+  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_time_contract
+  migrations/    0001..0018
 ```
 
 ## Соглашения проекта
@@ -50,8 +52,18 @@ tracker/
 1. **Схемы API обязательны.** Для каждого нового вью/экшена добавляй `@extend_schema` в `tracker/schemas.py`
    (теги и описания — на русском). Проверка: `python manage.py spectacular --file /tmp/schema.yml`.
 2. **Ошибки** возвращаются как `{'detail': '...'}`; тексты для пользователя — на русском.
-3. **Время.** `Event.time` в БД хранится в локальном времени пользователя (`UTC + timezone_offset`, смещение в
-   минутах). API принимает и отдаёт время в UTC. Пересчёт — только через `shift_time_by_minutes`.
+3. **Время.** **Инвариант: `Event.time` в БД всегда хранится в локальном времени события
+   (`UTC + timezone_offset`, смещение в минутах)** — независимо от клиента. Что принимает и отдаёт API,
+   зависит от заголовка запроса `X-Time-Contract` (`tracker/time_contract.py`):
+   - `X-Time-Contract: utc` — `time` в запросе и ответе в UTC; сервер переводит UTC ↔ локальное;
+   - заголовка нет (legacy, старые клиенты) — `time` локальное, сервер **ничего не сдвигает**.
+   Пересчёт — только через `time_to_stored` / `time_to_wire` (поверх `shift_time_by_minutes`), не вручную.
+   Применённый режим сервер возвращает заголовком ответа `X-Time-Contract`. Порядок событий внутри дня —
+   по моменту события (локальное время минус offset), а не по строке `time` из ответа.
+   Legacy-ветка временная: **планируемая дата удаления — 31.01.2027** (подтверждается при выкатке R1,
+   поведение после удаления — 426 «обновите приложение» либо трактовка как `utc` — решается по метрике).
+   Любой новый эндпоинт, отдающий или принимающий время события, обязан поддерживать оба режима и иметь
+   тесты на оба (см. `tests/test_time_contract.py`).
 4. **Права.** По умолчанию `IsAuthenticated` (см. `REST_FRAMEWORK` в `config/settings.py`); публичные вьюхи
    (`SendCodeView`, `VerifyCodeView`, `RefreshTokenView`) явно ставят `permissions.AllowAny`.
 5. **JWT.** Ротация refresh-токенов отключена (`ROTATE_REFRESH_TOKENS=False`), поэтому `/auth/token/refresh/`
@@ -111,3 +123,21 @@ docker compose -f docker-compose.dev.yml run --rm web python manage.py spectacul
   остальных пакетов при этом не поднимаются).
 - Не коммитить `.env`, `firebase-key.json`, `celerybeat-schedule`, `media/`.
 - Перед завершением задачи: `pytest` + `manage.py check` + `makemigrations --check --dry-run`.
+
+## Выкатка контракта времени (релиз R1)
+
+Миграция `0018_event_time_to_local` меняет данные (`Event.time = time − timezone_offset`) и должна идти
+**одним окном** с кодом режимов контракта (иначе строки сдвинутся дважды или останутся сдвинутыми):
+
+1. Ночью, пока ни один клиент не шлёт `X-Time-Contract` (все клиенты legacy).
+2. Остановить `web`, `celery` **и `celery-beat`** (старый код не должен ни писать события, ни слать пуши).
+3. Развернуть новый образ и применить миграции (`python manage.py migrate`).
+4. Запустить `web`, `celery`, `celery-beat`.
+5. Проверка: событие, созданное без заголовка с `time=17:05`, `timezone_offset=180`, лежит в БД как 17:05, отдаётся
+   как 17:05; с заголовком `utc` и `time=14:05` — лежит как 17:05, отдаётся как 14:05; пуш уходит в 17:05 МСК.
+6. Откат: тот же порядок с прежним образом и `python manage.py migrate tracker 0017` (обратная миграция
+   возвращает `local + offset` для всех строк).
+
+Сборку приложения с заголовком выпускать **только после** этой миграции. Метрика: логгер `tracker.time_contract`
+(INFO — каждый запрос к событиям с режимом и `X-App-Version`; WARNING `time_contract_missing` — запрос без заголовка от
+версии не ниже `TIME_CONTRACT_MIN_APP_VERSION`; переменная окружения, пусто = предупреждения выключены).

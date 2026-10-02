@@ -46,6 +46,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'tracker.middleware.TimeContractMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -218,3 +219,23 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 from pillow_heif import register_heif_opener
 register_heif_opener()
+
+
+# Контракт времени (см. tracker/time_contract.py): версия приложения (X-App-Version), начиная с которой
+# клиент обязан присылать X-Time-Contract. Пусто = предупреждения «заголовок забыли» выключены
+# (включить после выхода сборки с заголовком, например '0.1.0').
+TIME_CONTRACT_MIN_APP_VERSION = os.getenv('TIME_CONTRACT_MIN_APP_VERSION', '')
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'plain': {'format': '%(asctime)s %(levelname)s %(name)s %(message)s'},
+    },
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'plain'},
+    },
+    'loggers': {
+        'tracker.time_contract': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+    },
+}

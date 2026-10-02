@@ -39,13 +39,23 @@ def group_occurrences(events, date_from, date_to, serializer_class, serializer_c
     """Разворачивает события в вхождения и группирует их по датам.
 
     Возвращает словарь вида ``{'2026-09-30': [событие, ...]}``: ключи
-    отсортированы по дате, внутри даты события отсортированы по времени.
+    отсортированы по дате, внутри даты события отсортированы по локальному времени.
     Используется и в ``/event_schedule/period/``, и в ``/pets/{id}/upcoming/``.
     """
     base_context = dict(serializer_context or {})
     grouped = defaultdict(list)
 
     for event in events:
+        # Порядок внутри дня — по моменту события: локальное время минус offset, в секундах.
+        # Не по строке time из ответа: в режиме utc оно сдвинуто на offset и «заворачивается»
+        # через полночь, из-за чего 23:30 и 01:00 местного времени менялись местами.
+        # События без времени («весь день») идут первыми.
+        sort_key = (
+            event.time.hour * 3600 + event.time.minute * 60 + event.time.second
+            - event.timezone_offset * 60
+            if event.time
+            else float('-inf')
+        )
         for occurrence in generate_occurrences(event, date_from, date_to):
             serializer = serializer_class(
                 event,
@@ -54,12 +64,12 @@ def group_occurrences(events, date_from, date_to, serializer_class, serializer_c
             data = dict(serializer.data)
             # Дата конкретного вхождения, а не start_date события
             data['start_date'] = occurrence.isoformat()
-            grouped[data['start_date']].append(data)
+            grouped[data['start_date']].append((sort_key, data))
 
     for items in grouped.values():
-        items.sort(key=lambda item: item.get('time') or '')
+        items.sort(key=lambda item: item[0])
 
-    return {date_key: grouped[date_key] for date_key in sorted(grouped)}
+    return {date_key: [data for _, data in grouped[date_key]] for date_key in sorted(grouped)}
 
 
 # --- Authentication Views ---
