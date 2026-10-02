@@ -5,7 +5,7 @@ from datetime import timedelta
 import jwt
 from django.conf import settings
 from django.db.models import Q
-from django.utils.dateparse import parse_date
+from django.utils.dateparse import parse_date, parse_time
 from django.utils import timezone
 from django.core.cache import cache
 from rest_framework import status, permissions, viewsets, generics
@@ -26,6 +26,8 @@ from tracker.serializers import (
     DeviceRegistrationSerializer
 )
 from tracker.tasks import send_confirmation_code
+from tracker.recurrence import event_slots
+from tracker.time_contract import get_time_contract, time_to_stored
 from tracker.utils import generate_occurrences
 from tracker import schemas
 
@@ -73,38 +75,46 @@ def group_occurrences(events, date_from, date_to, serializer_class, serializer_c
     base_context['completed'] = set(
         EventCompletion.objects
         .filter(event_id__in=[e.id for e in events], occurrence_date__gte=date_from, occurrence_date__lte=date_to)
-        .values_list('event_id', 'occurrence_date')
+        .values_list('event_id', 'occurrence_date', 'occurrence_time')
     )
-    base_context['pet_data_cache'] = {}
+    base_context['include_pet_obj'] = False
 
     total = 0
     for event in events:
-        # Порядок внутри дня — по моменту события: локальное время минус offset, в секундах.
-        # Не по строке time из ответа: в режиме utc оно сдвинуто на offset и «заворачивается»
-        # через полночь, из-за чего 23:30 и 01:00 местного времени менялись местами.
-        # События без времени («весь день») идут первыми.
-        sort_key = (
-            event.time.hour * 3600 + event.time.minute * 60 + event.time.second
-            - event.timezone_offset * 60
-            if event.time
-            else float('-inf')
-        )
-        for occurrence in generate_occurrences(event, date_from, date_to):
-            total += 1
-            if total > MAX_OCCURRENCES_PER_RESPONSE:
-                logger.warning(
-                    'occurrence_limit_exceeded date_from=%s date_to=%s limit=%s',
-                    date_from, date_to, MAX_OCCURRENCES_PER_RESPONSE,
-                )
-                raise OccurrenceLimitError
-            serializer = serializer_class(
-                event,
-                context={**base_context, 'occurrence_date': occurrence},
+        slots = event_slots(event)
+        multi_slot = len(slots) > 1
+        occurrence_days = generate_occurrences(event, date_from, date_to)
+        for slot in slots:
+            # Порядок внутри дня — по моменту события: локальное время минус offset, в секундах.
+            # Не по строке time из ответа: в режиме utc оно сдвинуто на offset и «заворачивается»
+            # через полночь, из-за чего 23:30 и 01:00 местного времени менялись местами.
+            # События без времени («весь день») идут первыми.
+            sort_key = (
+                slot.hour * 3600 + slot.minute * 60 + slot.second - event.timezone_offset * 60
+                if slot
+                else float('-inf')
             )
-            data = dict(serializer.data)
-            # Дата конкретного вхождения, а не start_date события
-            data['start_date'] = occurrence.isoformat()
-            grouped[data['start_date']].append((sort_key, data))
+            for occurrence in occurrence_days:
+                total += 1
+                if total > MAX_OCCURRENCES_PER_RESPONSE:
+                    logger.warning(
+                        'occurrence_limit_exceeded date_from=%s date_to=%s limit=%s',
+                        date_from, date_to, MAX_OCCURRENCES_PER_RESPONSE,
+                    )
+                    raise OccurrenceLimitError
+                serializer = serializer_class(
+                    event,
+                    context={
+                        **base_context,
+                        'occurrence_date': occurrence,
+                        'slot_time': slot,
+                        'occurrence_time': slot if multi_slot else None,
+                    },
+                )
+                data = dict(serializer.data)
+                # Дата конкретного вхождения, а не start_date события
+                data['start_date'] = occurrence.isoformat()
+                grouped[data['start_date']].append((sort_key, data))
 
     for items in grouped.values():
         items.sort(key=lambda item: item[0])
@@ -359,7 +369,7 @@ class PetViewSet(viewsets.ModelViewSet):
         events = (
             Event.objects
             .filter(user=request.user, pet=pet)
-            .select_related('recurrence', 'pet', 'pet__breed')
+            .select_related('recurrence')
         )
 
         try:
@@ -443,24 +453,59 @@ class EventViewSet(viewsets.ModelViewSet):
             return _limit_error_response()
 
 
+    def _completion_target(self, request, event):
+        """Дата и слот отметки. Возвращает ``(date, slot, error_response)``.
+
+        Слот нужен только при нескольких временах в день: ``time`` обязателен и должен совпадать
+        с одним из слотов (формат — по контракту времени запроса). Иначе слот ``None`` (как раньше).
+        """
+        occurrence_date = parse_date(str(request.data.get('date') or ''))
+        if not occurrence_date:
+            return None, None, Response({'detail': 'date is required'}, status=400)
+
+        slots = event_slots(event)
+        if len(slots) <= 1:
+            return occurrence_date, None, None
+
+        raw_time = request.data.get('time')
+        if not raw_time:
+            return None, None, Response(
+                {'detail': 'time is required: у события несколько времён в день'}, status=400,
+            )
+        parsed = parse_time(str(raw_time))
+        if parsed is None:
+            return None, None, Response({'detail': 'time has invalid format'}, status=400)
+        slot = time_to_stored(parsed, event.timezone_offset, get_time_contract(request)).replace(second=0, microsecond=0)
+        if slot not in slots:
+            return None, None, Response({'detail': 'time does not match any slot of the event'}, status=400)
+        return occurrence_date, slot, None
+
     @action(detail=True, methods=['post'])
     def mark_done(self, request, pk=None):
-        """Отметить событие выполненным на дату"""
+        """Отметить событие выполненным на дату (при нескольких временах в день — на слот `time`)"""
         event = self.get_object()
-        occurrence_date = parse_date(request.data.get('date'))
-        if not occurrence_date:
-            return Response({'detail': 'date is required'}, status=400)
+        occurrence_date, slot, error = self._completion_target(request, event)
+        if error:
+            return error
 
-        EventCompletion.objects.get_or_create(event=event, occurrence_date=occurrence_date)
+        EventCompletion.objects.get_or_create(event=event, occurrence_date=occurrence_date, occurrence_time=slot)
         return Response({'done': True})
 
     @action(detail=True, methods=['post'])
     def mark_undone(self, request, pk=None):
-        """Отменить выполнение события на дату"""
+        """Отменить выполнение события на дату (при нескольких временах в день — на слот `time`)"""
         event = self.get_object()
-        occurrence_date = parse_date(request.data.get('date'))
-        if not occurrence_date:
-            return Response({'detail': 'date is required'}, status=400)
+        occurrence_date, slot, error = self._completion_target(request, event)
+        if error:
+            return error
 
-        EventCompletion.objects.filter(event=event, occurrence_date=occurrence_date).delete()
+        completions = EventCompletion.objects.filter(event=event, occurrence_date=occurrence_date)
+        if slot is None:
+            pass  # одно время / весь день: как раньше, снимаем все отметки даты
+        elif slot == event.time:
+            # старая отметка без слота относится к первому слоту
+            completions = completions.filter(Q(occurrence_time=slot) | Q(occurrence_time__isnull=True))
+        else:
+            completions = completions.filter(occurrence_time=slot)
+        completions.delete()
         return Response({'done': False})

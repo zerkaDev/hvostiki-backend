@@ -164,3 +164,18 @@ class TestPeriodLimits:
         _post(auth_client, pet, {'frequency': 'daily', 'end_date': '2026-10-08'})
         r = auth_client.get(self.PERIOD, {'date_from': '2026-10-09', 'date_to': '2026-10-20'}, **HEADERS)
         assert r.status_code == 200 and r.data == {}
+
+
+@pytest.mark.django_db
+class TestPetObj:
+    def test_lists_have_no_pet_obj_but_single_responses_do(self, auth_client, pet):
+        created = _post(auth_client, pet, {'frequency': 'daily'})
+        assert 'pet_obj' in created.data
+        period = auth_client.get('/event_schedule/period/', {'date_from': '2026-10-05', 'date_to': '2026-10-06'}, **HEADERS)
+        assert all('pet_obj' not in item for items in period.data.values() for item in items)
+        assert period.data['2026-10-05'][0]['pet'] == pet.id
+        upcoming = auth_client.get(f'/pets/{pet.id}/upcoming/', {'date_from': '2026-10-05'}, **HEADERS)
+        assert upcoming.status_code == 200
+        assert all('pet_obj' not in item for items in upcoming.data.values() for item in items)
+        detail = auth_client.get(f"/event_schedule/{created.data['id']}/", **HEADERS)
+        assert 'pet_obj' in detail.data

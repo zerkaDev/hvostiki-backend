@@ -26,6 +26,8 @@ LAST_DAY = -1
 # Допустимые значения интервала по периодам (проверяются при записи; старые строки читаются как есть)
 MAX_INTERVAL = {DAILY: 30, WEEKLY: 12, MONTHLY: 12, YEARLY: 10}
 
+MAX_TIMES = 6
+
 MIN_END_COUNT = 2
 MAX_END_COUNT = 999
 
@@ -360,6 +362,7 @@ def normalize_rule(data: dict) -> dict:
         'year_dates': year_dates,
         'end_date': end_date,
         'end_count': end_count,
+        'times': data.get('times'),
     }
 
 
@@ -380,3 +383,38 @@ def recompute_until(rule_model, start: date):
     """Пересчитывает ``rule_model.until`` по текущему состоянию (вызывать перед save)."""
     rule_model.until = compute_until(Rule.from_model(rule_model), start)
     return rule_model.until
+
+
+def normalize_times(frequency, times, event_time):
+    """Слоты времени в день (локальные ``datetime.time``) → ``(times_для_БД, время_события)``.
+
+    * не daily или список пуст → ``(None, event_time)`` (``times`` обнуляются);
+    * нужен ``event_time`` (для события «весь день» слоты бессмысленны);
+    * дубли сливаются, порядок — по возрастанию; 1 слот → ``times = None``, ``event_time = слот``;
+      ≥2 слотов → ``event_time`` = первый слот;
+    * не больше :data:`MAX_TIMES` слотов.
+    """
+    if frequency != DAILY or not times:
+        return None, event_time
+    if event_time is None:
+        raise RuleError('times_without_time', 'Несколько времён нельзя задать событию без времени', field='times')
+    slots = sorted({t.replace(second=0, microsecond=0) for t in times})
+    if len(slots) > MAX_TIMES:
+        raise RuleError('invalid_times', f'Не больше {MAX_TIMES} времён в день', field='times')
+    if len(slots) == 1:
+        return None, slots[0]
+    return [t.strftime('%H:%M') for t in slots], slots[0]
+
+
+def parse_stored_times(values):
+    """Хранимые ``['08:00', ...]`` → список ``datetime.time``."""
+    from datetime import time
+    return [time(int(v[:2]), int(v[3:5])) for v in (values or [])]
+
+
+def event_slots(event):
+    """Слоты события (локальное время): ``[time]`` для многослотового, иначе ``[event.time]`` (может быть ``None``)."""
+    rule = event.recurrence if event.is_recurring else None
+    if rule is not None and rule.frequency == DAILY and rule.times:
+        return parse_stored_times(rule.times)
+    return [event.time]

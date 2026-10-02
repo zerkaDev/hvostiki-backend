@@ -237,6 +237,9 @@ class RecurrenceRule(models.Model):
     week_days = models.JSONField(blank=True, null=True)   # [1,4]
     month_days = models.JSONField(blank=True, null=True)  # [5,20], -1 = последний день месяца
     year_dates = models.JSONField(blank=True, null=True)  # [{"month": 3, "day": 15}]
+    # Несколько времён в день (только daily, ≥2 значений): ["08:00", "14:00"], локальное время события.
+    # При одном времени поле пустое, время хранится в Event.time.
+    times = models.JSONField(blank=True, null=True)
 
     # Окончание: «до даты» (end_date) либо «после N повторений» (end_count); не оба сразу.
     end_date = models.DateField(blank=True, null=True)
@@ -322,19 +325,35 @@ class EventNotificationLog(models.Model):
         choices=EventNotificationType.choices,
         default=EventNotificationType.STANDARD
     )
+    # Слот времени при нескольких временах в день; NULL — обычное событие (одно время / весь день)
+    occurrence_time = models.TimeField(null=True, blank=True)
     sent_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('event', 'occurrence_date', 'notification_type')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['event', 'occurrence_date', 'occurrence_time', 'notification_type'],
+                nulls_distinct=False,
+                name='uniq_notification_slot',
+            ),
+        ]
 
 
 class EventCompletion(models.Model):
     event = models.ForeignKey('Event', on_delete=models.CASCADE)
     occurrence_date = models.DateField()
+    # Слот времени при нескольких временах в день; NULL — одно время / весь день (как раньше)
+    occurrence_time = models.TimeField(null=True, blank=True)
     done_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('event', 'occurrence_date')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['event', 'occurrence_date', 'occurrence_time'],
+                nulls_distinct=False,
+                name='uniq_completion_slot',
+            ),
+        ]
 
 
 class FCMDevice(models.Model):

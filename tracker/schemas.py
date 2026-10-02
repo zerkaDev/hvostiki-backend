@@ -409,7 +409,8 @@ EVENT_VIEWSET_SCHEMAS = {
             'Правило `recurrence`: `frequency` (daily/weekly/monthly/yearly), `interval` (дни 1–30, недели/месяцы 1–12, '
             'годы 1–10), `week_days` (1–7), `month_days` (1–31 или -1 — последний день), `year_dates` '
             '([{month, day}]), окончание: `end_date` либо `end_count` (2–999), `end_type` (never/date/count) '
-            'вычисляется. Поля чужих периодов обнуляются. Ошибки окончания: коды `end_before_start`, `end_before_first`.'
+            'вычисляется. `times` (только daily, 1–6 значений «HH:MM» в формате `time` по `X-Time-Contract`) — '
+            'несколько времён в день; `Event.time` становится первым слотом. Поля чужих периодов обнуляются. Ошибки окончания: коды `end_before_start`, `end_before_first`.'
         ),
     ),
     'period': extend_schema(
@@ -456,6 +457,8 @@ EVENT_VIEWSET_SCHEMAS = {
                 - Для одноразового события передавайте его start_date
                 - Для повторяющегося — дату конкретного occurrence
                 - Повторный вызов безопасен (idempotent)
+                - Если у события несколько времён в день (`recurrence.times`), обязательно передайте `time`
+                  (формат — по `X-Time-Contract`, как у события); без него или с несуществующим слотом — 400
                 """,
         request=OpenApiTypes.OBJECT,
         responses={
@@ -474,6 +477,7 @@ EVENT_VIEWSET_SCHEMAS = {
         summary='Отменить выполнение события',
         description="""
                 Удаляет отметку о выполнении для конкретного occurrence события.
+                При нескольких временах в день нужен `time` слота (см. mark_done).
                 """,
         request=OpenApiTypes.OBJECT,
         responses={

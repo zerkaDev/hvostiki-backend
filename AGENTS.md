@@ -44,9 +44,9 @@ tracker/
   time_contract.py  режимы контракта времени (utc/legacy), конвертация, учёт использования
   middleware.py  TimeContractMiddleware (режим, заголовок ответа, лог для метрики)
   backends.py    PhoneBackend (вход в Django Admin по телефону)
-  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_time_contract/test_recurrence_*
+  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_time_contract/test_recurrence_* (vectors/api/slots)
   tests/data/recurrence_vectors.json  общие векторы повторений (те же, что в мобильном приложении)
-  migrations/    0001..0019
+  migrations/    0001..0020
 ```
 
 ## Соглашения проекта
@@ -77,7 +77,8 @@ tracker/
 6. **Только отправленный код подтверждения.** В проде `DEBUG_CONFIRMATION_CODE` не задаётся, поэтому
    фиксированного кода `1234` нет; в dev он включается переменной окружения (см. README).
 7. **Чтение связанных объектов.** Сериализаторы добавляют «развёрнутые» поля (`pet_obj`, `breed_obj`), это часть
-   контракта с мобильным клиентом — не удалять.
+   контракта с мобильным клиентом — не удалять. Исключение: в списках `/event_schedule/period/` и
+   `/pets/{id}/upcoming/` у событий `pet_obj` нет (клиент берёт питомца по `pet` из своего списка).
 8. **Секреты.** `.env` и `firebase-key.json` в `.gitignore` — никогда не коммитить. Push не работает, если
    `firebase-key.json` отсутствует в корне проекта.
 
@@ -114,7 +115,12 @@ docker compose -f docker-compose.dev.yml run --rm web python manage.py spectacul
 - **Повторения.** Семантика — в docstring `tracker/recurrence.py`; любое её изменение сначала вносится в
   `tests/data/recurrence_vectors.json` (общий с приложением). `RecurrenceRule.until` — кэш последней даты:
   пересчитывается в сериализаторе при создании/правке правила и смене `start_date`. `/period/`: окно ≤ 400 дней,
-  ≤ 10 000 вхождений, иначе 400; включён `GZipMiddleware`.
+  ≤ 10 000 вхождений (считаются слоты), иначе 400; включён `GZipMiddleware`.
+- **Несколько времён в день.** `RecurrenceRule.times` (только daily, ≥2 значений, локальное время, `HH:MM`);
+  при одном слоте поле пустое, время в `Event.time`; `Event.time` = первый слот. В `/period/` — запись на слот
+  (`time` слота, `done` по слоту). `EventCompletion`/`EventNotificationLog.occurrence_time` (NULL — «как раньше»,
+  в многослотовом режиме NULL-отметка относится к первому слоту); `mark_done`/`mark_undone` при >1 слоте требуют
+  `time`. Уведомления — по каждому слоту, в данных пуша `time`.
 - **`token_blacklist`** растёт: чистка висит на задаче `flush_expired_tokens` в beat, а `celery-beat`
   обязателен и в проде (`docker-compose.prod.yml`).
 - **Уведомления** рассылаются только тем устройствам, что зарегистрированы через `POST /devices/register/`;

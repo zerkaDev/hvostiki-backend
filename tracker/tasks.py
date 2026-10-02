@@ -10,6 +10,7 @@ from tracker.models import Event, EventNotificationLog, EventCompletion, EventNo
 
 from tracker.services.ucalles_service import UCallerService
 from tracker.services.firebase_service import firebase_service
+from tracker.recurrence import event_slots
 from tracker.utils import generate_occurrences
 
 # Beat и воркер могут сработать с задержкой, поэтому уведомление считается
@@ -66,6 +67,16 @@ def send_event_notifications():
 
 
 def _notify_event(event, now_utc):
+    slots = event_slots(event)
+    for slot in slots:
+        # Сбой одного слота не должен лишать уведомления остальные слоты того же события
+        try:
+            _notify_slot(event, slot, len(slots) > 1, now_utc)
+        except Exception:
+            logger.exception('send_event_notifications: сбой по событию %s, слот %s', event.id, slot)
+
+
+def _notify_slot(event, slot_time, multi_slot, now_utc):
     # Локальное «настенное» время пользователя
     now_local = (now_utc + timedelta(minutes=event.timezone_offset)).replace(tzinfo=None)
 
@@ -81,9 +92,9 @@ def _notify_event(event, now_utc):
     # Смотрим текущие и предыдущие сутки: рассылка могла задержаться и
     # сработать уже после полуночи.
     for day in (now_local.date(), (now_local - timedelta(days=1)).date()):
-        if event.time is not None:
-            # Scenario A: событие со временем
-            if _is_due(datetime.combine(day, event.time), now_local):
+        if slot_time is not None:
+            # Scenario A: событие со временем (или один из слотов времени в день)
+            if _is_due(datetime.combine(day, slot_time), now_local):
                 notification_type = EventNotificationType.STANDARD
                 occurrence_date = day
                 break
@@ -109,7 +120,15 @@ def _notify_event(event, now_utc):
         return
 
     # Проверяем, не выполнено ли уже
-    if EventCompletion.objects.filter(event=event, occurrence_date=occurrence_date).exists():
+    occurrence_time = slot_time if multi_slot else None
+    done = EventCompletion.objects.filter(event=event, occurrence_date=occurrence_date)
+    if multi_slot:
+        # старая отметка без слота (NULL) относится к первому слоту
+        slot_filter = Q(occurrence_time=slot_time)
+        if slot_time == event.time:
+            slot_filter |= Q(occurrence_time__isnull=True)
+        done = done.filter(slot_filter)
+    if done.exists():
         return
 
     # «Занимаем» запись лога ДО отправки: уникальный индекс не даёт двум воркерам/запускам
@@ -119,6 +138,7 @@ def _notify_event(event, now_utc):
             log = EventNotificationLog.objects.create(
                 event=event,
                 occurrence_date=occurrence_date,
+                occurrence_time=occurrence_time,
                 notification_type=notification_type,
             )
     except IntegrityError:
@@ -138,7 +158,11 @@ def _notify_event(event, now_utc):
                 token=device.fcm_token,
                 title=title,
                 body=body,
-                data={'event_id': str(event.id), 'type': notification_type}
+                data={
+                    'event_id': str(event.id),
+                    'type': notification_type,
+                    **({'time': slot_time.strftime('%H:%M')} if multi_slot else {}),
+                },
             )
     except Exception:
         log.delete()  # следующий запуск (в пределах окна) попробует снова

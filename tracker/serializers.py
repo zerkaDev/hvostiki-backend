@@ -1,11 +1,12 @@
 from django.conf import settings
+from django.db.models import Q
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework.exceptions import ErrorDetail
 from tracker.recurrence import (
-    END_TYPES, RuleError, check_end_against_start, derive_end_type, normalize_rule, recompute_until,
-    rule_from_normalized,
+    END_TYPES, RuleError, check_end_against_start, derive_end_type, normalize_rule, normalize_times,
+    parse_stored_times, recompute_until, rule_from_normalized,
 )
 from tracker.models import User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
 
@@ -169,6 +170,10 @@ class DeviceRegistrationSerializer(serializers.Serializer):
 class RecurrenceRuleSerializer(serializers.ModelSerializer):
     # Вычисляется из end_date / end_count; на вход можно передать явно (never/date/count)
     end_type = serializers.ChoiceField(choices=END_TYPES, required=False)
+    # «HH:MM»; на проводе — по контракту времени (utc/legacy), в БД — локальное время события
+    times = serializers.ListField(
+        child=serializers.TimeField(), required=False, allow_null=True, allow_empty=True,
+    )
 
     class Meta:
         model = RecurrenceRule
@@ -178,6 +183,7 @@ class RecurrenceRuleSerializer(serializers.ModelSerializer):
             'week_days',
             'month_days',
             'year_dates',
+            'times',
             'end_type',
             'end_date',
             'end_count',
@@ -212,14 +218,22 @@ class EventSerializer(serializers.ModelSerializer):
         if occurrence_date is None:
             occurrence_date = obj.start_date
 
+        # Слот времени вхождения (только при нескольких временах в день), иначе None
+        slot = self.context.get('occurrence_time')
+        # Старая отметка без времени (NULL) в многослотовом режиме относится к первому слоту
+        legacy_slot = slot is not None and slot == obj.time
+
         completed = self.context.get('completed')
         if completed is not None:
-            return (obj.id, occurrence_date) in completed
+            return (obj.id, occurrence_date, slot) in completed or (
+                legacy_slot and (obj.id, occurrence_date, None) in completed
+            )
 
-        return EventCompletion.objects.filter(
-            event=obj,
-            occurrence_date=occurrence_date,
-        ).exists()
+        query = EventCompletion.objects.filter(event=obj, occurrence_date=occurrence_date)
+        if slot is None:
+            return query.filter(occurrence_time__isnull=True).exists()
+        flt = Q(occurrence_time=slot) | (Q(occurrence_time__isnull=True) if legacy_slot else Q())
+        return query.filter(flt).exists()
 
     class Meta:
         model = Event
@@ -277,11 +291,11 @@ class EventSerializer(serializers.ModelSerializer):
         self._rule_state = None
         if is_recurring:
             start_date = data.get('start_date') or (self.instance.start_date if self.instance else None)
-            self._rule_state = self._validate_rule(recurrence, start_date)
+            self._rule_state = self._validate_rule(recurrence, start_date, data, effective_offset)
 
         return data
 
-    def _validate_rule(self, patch, start_date):
+    def _validate_rule(self, patch, start_date, data, offset):
         """Итоговое состояние правила (instance + patch): нормализация и проверка окончания."""
         current = self.instance.recurrence if self.instance else None
         merged = {}
@@ -302,28 +316,56 @@ class EventSerializer(serializers.ModelSerializer):
         try:
             state = normalize_rule(merged)
             check_end_against_start(rule_from_normalized(state), start_date)
+            self._apply_times(state, patch, current, data, offset)
         except RuleError as exc:
             raise serializers.ValidationError({
                 exc.field or 'recurrence': [ErrorDetail(exc.message, code=exc.code)],
             })
         return state
 
+    def _apply_times(self, state, patch, current, data, offset):
+        """Слоты времени: в БД — локальные; ``Event.time`` согласуется с первым слотом."""
+        from_patch = patch.get('times') is not None
+        if from_patch:
+            contract = get_time_contract(self.context.get('request'))
+            raw = [time_to_stored(t, offset, contract) for t in patch['times']]
+        elif current is not None:
+            raw = parse_stored_times(current.times)
+        else:
+            raw = []
+
+        event_time = data['time'] if 'time' in data else (self.instance.time if self.instance else None)
+        times, new_time = normalize_times(state['frequency'], raw, event_time)
+
+        if times and not from_patch and 'time' in data and data['time'].replace(second=0, microsecond=0) != new_time:
+            raise RuleError(
+                'time_conflicts_with_times',
+                'Время события задаётся списком времён в правиле (recurrence.times)',
+                field='time',
+            )
+        state['times'] = times
+        if raw and state['frequency'] == 'daily':
+            data['time'] = new_time
+
     def to_representation(self, instance):
         rep = super().to_representation(instance)
 
-        # utc → отдаём время в UTC+0; legacy → локальное, как хранится
-        if instance.time is not None:
-            contract = get_time_contract(self.context.get('request'))
-            rep['time'] = time_to_wire(instance.time, instance.timezone_offset, contract).isoformat()
-        
-        # Добавляем полный объект питомца для чтения
-        cache = self.context.get('pet_data_cache')
-        if cache is None:
+        # utc → отдаём время в UTC+0; legacy → локальное, как хранится.
+        # В списках вхождение может относиться к слоту (несколько времён в день) — его время в контексте.
+        contract = get_time_contract(self.context.get('request'))
+        shown_time = self.context.get('slot_time', instance.time)
+        if shown_time is not None:
+            rep['time'] = time_to_wire(shown_time, instance.timezone_offset, contract).isoformat()
+        if rep.get('recurrence') and instance.recurrence and instance.recurrence.times:
+            rep['recurrence']['times'] = [
+                time_to_wire(t, instance.timezone_offset, contract).strftime('%H:%M')
+                for t in parse_stored_times(instance.recurrence.times)
+            ]
+
+        # В списках (/period/, /upcoming/) питомец не дублируется в каждом вхождении: клиент
+        # берёт его по `pet` (id) из своего списка питомцев. В одиночных ответах pet_obj остаётся.
+        if self.context.get('include_pet_obj', True):
             rep['pet_obj'] = PetSerializer(instance.pet, context=self.context).data
-        else:
-            if instance.pet_id not in cache:
-                cache[instance.pet_id] = PetSerializer(instance.pet, context=self.context).data
-            rep['pet_obj'] = cache[instance.pet_id]
         return rep
 
     def create(self, validated_data):
