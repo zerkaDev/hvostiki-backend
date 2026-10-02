@@ -39,12 +39,14 @@ tracker/
   tasks.py       Celery-задачи (send_confirmation_code, send_event_notifications,
                  flush_expired_tokens)
   services/      firebase_service.py (FCM), ucalles_service.py (звонки-коды)
-  utils.py       generate_occurrences, shift_time_by_minutes, normalize_phone
+  recurrence.py  движок повторений (чистые функции): якорь, clamp, -1, yearly, until, normalize_rule
+  utils.py       generate_occurrences (тонкая обёртка над движком), shift_time_by_minutes, normalize_phone
   time_contract.py  режимы контракта времени (utc/legacy), конвертация, учёт использования
   middleware.py  TimeContractMiddleware (режим, заголовок ответа, лог для метрики)
   backends.py    PhoneBackend (вход в Django Admin по телефону)
-  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_time_contract
-  migrations/    0001..0018
+  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_time_contract/test_recurrence_*
+  tests/data/recurrence_vectors.json  общие векторы повторений (те же, что в мобильном приложении)
+  migrations/    0001..0019
 ```
 
 ## Соглашения проекта
@@ -105,9 +107,14 @@ docker compose -f docker-compose.dev.yml run --rm web python manage.py spectacul
 
 - **`Event.done` — legacy**: фактический статус выполнения хранится в `EventCompletion`, поле `done` в API
   вычисляется (`SerializerMethodField`). Поле в БД осталось для совместимости.
-- **`send_event_notifications`** обходит все события каждую минуту (SQL-фильтра по дате нет) — на больших
-  объёмах стоит добавить предварительную выборку. Окно срабатывания — `NOTIFICATION_LOOKBACK` (2 минуты),
-  повторные отправки отсекает `EventNotificationLog`.
+- **`send_event_notifications`** каждую минуту выбирает события с SQL-предфильтром по дате старта и
+  `RecurrenceRule.until`; сбой одного события логируется и не останавливает остальных. Запись
+  `EventNotificationLog` «занимается» до отправки (уникальный индекс), при ошибке отправки снимается.
+  Окно срабатывания — `NOTIFICATION_LOOKBACK` (2 минуты).
+- **Повторения.** Семантика — в docstring `tracker/recurrence.py`; любое её изменение сначала вносится в
+  `tests/data/recurrence_vectors.json` (общий с приложением). `RecurrenceRule.until` — кэш последней даты:
+  пересчитывается в сериализаторе при создании/правке правила и смене `start_date`. `/period/`: окно ≤ 400 дней,
+  ≤ 10 000 вхождений, иначе 400; включён `GZipMiddleware`.
 - **`token_blacklist`** растёт: чистка висит на задаче `flush_expired_tokens` в beat, а `celery-beat`
   обязателен и в проде (`docker-compose.prod.yml`).
 - **Уведомления** рассылаются только тем устройствам, что зарегистрированы через `POST /devices/register/`;

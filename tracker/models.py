@@ -222,6 +222,7 @@ class RecurrenceFrequency(models.TextChoices):
     DAILY = 'daily', 'Daily'
     WEEKLY = 'weekly', 'Weekly'
     MONTHLY = 'monthly', 'Monthly'
+    YEARLY = 'yearly', 'Yearly'
 
 
 class RecurrenceRule(models.Model):
@@ -234,16 +235,26 @@ class RecurrenceRule(models.Model):
     interval = models.PositiveIntegerField(default=1)
 
     week_days = models.JSONField(blank=True, null=True)   # [1,4]
-    month_days = models.JSONField(blank=True, null=True)  # [5,20]
+    month_days = models.JSONField(blank=True, null=True)  # [5,20], -1 = последний день месяца
+    year_dates = models.JSONField(blank=True, null=True)  # [{"month": 3, "day": 15}]
 
+    # Окончание: «до даты» (end_date) либо «после N повторений» (end_count); не оба сразу.
     end_date = models.DateField(blank=True, null=True)
+    end_count = models.PositiveIntegerField(blank=True, null=True)
+    # Эффективная последняя дата: end_date либо дата N-го вхождения-дня. Кэш для SQL-предфильтра
+    # (рассылки) — пересчитывается при каждом сохранении правила/даты старта события.
+    until = models.DateField(blank=True, null=True, db_index=True)
 
     def clean(self):
-        if self.frequency == RecurrenceFrequency.WEEKLY and not self.week_days:
-            raise ValidationError('week_days required for weekly recurrence')
-
-        if self.frequency == RecurrenceFrequency.MONTHLY and not self.month_days:
-            raise ValidationError('month_days required for monthly recurrence')
+        from tracker.recurrence import RuleError, normalize_rule
+        try:
+            normalize_rule({
+                'frequency': self.frequency, 'interval': self.interval,
+                'week_days': self.week_days, 'month_days': self.month_days,
+                'year_dates': self.year_dates, 'end_date': self.end_date, 'end_count': self.end_count,
+            })
+        except RuleError as exc:
+            raise ValidationError(exc.message)
 
     def __str__(self):
         return f'{self.frequency}'

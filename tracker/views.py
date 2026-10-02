@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import timedelta
 import jwt
 from django.conf import settings
+from django.db.models import Q
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from django.core.cache import cache
@@ -32,7 +33,25 @@ logger = logging.getLogger(__name__)
 
 # Окно «ближайших событий» по умолчанию (в днях) и допустимый максимум
 DEFAULT_UPCOMING_DAYS = 14
+MAX_PERIOD_DAYS = 400
+MAX_OCCURRENCES_PER_RESPONSE = 10_000
 MAX_UPCOMING_DAYS = 60
+
+
+class OccurrenceLimitError(Exception):
+    """Запрошено слишком много вхождений за один ответ."""
+
+
+def _in_window(events, date_from, date_to):
+    """SQL-предфильтр: события, у которых вообще может быть вхождение в окне."""
+    return events.filter(start_date__lte=date_to).filter(
+        Q(is_recurring=False, start_date__gte=date_from)
+        | Q(is_recurring=True) & (
+            Q(recurrence__until__isnull=True, recurrence__end_date__isnull=True)
+            | Q(recurrence__until__gte=date_from)
+            | Q(recurrence__until__isnull=True, recurrence__end_date__gte=date_from)
+        )
+    )
 
 
 def group_occurrences(events, date_from, date_to, serializer_class, serializer_context=None):
@@ -41,10 +60,24 @@ def group_occurrences(events, date_from, date_to, serializer_class, serializer_c
     Возвращает словарь вида ``{'2026-09-30': [событие, ...]}``: ключи
     отсортированы по дате, внутри даты события отсортированы по локальному времени.
     Используется и в ``/event_schedule/period/``, и в ``/pets/{id}/upcoming/``.
+    Бросает :class:`OccurrenceLimitError`, если вхождений больше ``MAX_OCCURRENCES_PER_RESPONSE``.
     """
     base_context = dict(serializer_context or {})
     grouped = defaultdict(list)
 
+    if hasattr(events, 'filter'):
+        events = _in_window(events, date_from, date_to)
+    events = list(events)
+
+    # Отметки выполнения и данные питомцев — одним запросом/сериализацией, а не на каждое вхождение
+    base_context['completed'] = set(
+        EventCompletion.objects
+        .filter(event_id__in=[e.id for e in events], occurrence_date__gte=date_from, occurrence_date__lte=date_to)
+        .values_list('event_id', 'occurrence_date')
+    )
+    base_context['pet_data_cache'] = {}
+
+    total = 0
     for event in events:
         # Порядок внутри дня — по моменту события: локальное время минус offset, в секундах.
         # Не по строке time из ответа: в режиме utc оно сдвинуто на offset и «заворачивается»
@@ -57,6 +90,13 @@ def group_occurrences(events, date_from, date_to, serializer_class, serializer_c
             else float('-inf')
         )
         for occurrence in generate_occurrences(event, date_from, date_to):
+            total += 1
+            if total > MAX_OCCURRENCES_PER_RESPONSE:
+                logger.warning(
+                    'occurrence_limit_exceeded date_from=%s date_to=%s limit=%s',
+                    date_from, date_to, MAX_OCCURRENCES_PER_RESPONSE,
+                )
+                raise OccurrenceLimitError
             serializer = serializer_class(
                 event,
                 context={**base_context, 'occurrence_date': occurrence},
@@ -70,6 +110,13 @@ def group_occurrences(events, date_from, date_to, serializer_class, serializer_c
         items.sort(key=lambda item: item[0])
 
     return {date_key: [data for _, data in grouped[date_key]] for date_key in sorted(grouped)}
+
+
+def _limit_error_response():
+    return Response(
+        {'detail': 'Слишком много событий в выбранном периоде. Сократите период.'},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 # --- Authentication Views ---
@@ -315,15 +362,18 @@ class PetViewSet(viewsets.ModelViewSet):
             .select_related('recurrence', 'pet', 'pet__breed')
         )
 
-        return Response(
-            group_occurrences(
-                events,
-                date_from,
-                date_to,
-                EventSerializer,
-                self.get_serializer_context(),
+        try:
+            return Response(
+                group_occurrences(
+                    events,
+                    date_from,
+                    date_to,
+                    EventSerializer,
+                    self.get_serializer_context(),
+                )
             )
-        )
+        except OccurrenceLimitError:
+            return _limit_error_response()
 
 
 class BreedListAPIView(generics.ListAPIView):
@@ -373,15 +423,24 @@ class EventViewSet(viewsets.ModelViewSet):
         if not date_from or not date_to:
             return Response({'detail': 'date_from and date_to are required'}, status=400)
 
-        return Response(
-            group_occurrences(
-                self.get_queryset(),
-                date_from,
-                date_to,
-                self.get_serializer_class(),
-                self.get_serializer_context(),
+        if date_from > date_to:
+            return Response({'detail': 'date_from must not be after date_to'}, status=400)
+
+        if (date_to - date_from).days > MAX_PERIOD_DAYS:
+            return Response({'detail': f'Период не может быть больше {MAX_PERIOD_DAYS} дней'}, status=400)
+
+        try:
+            return Response(
+                group_occurrences(
+                    self.get_queryset(),
+                    date_from,
+                    date_to,
+                    self.get_serializer_class(),
+                    self.get_serializer_context(),
+                )
             )
-        )
+        except OccurrenceLimitError:
+            return _limit_error_response()
 
 
     @action(detail=True, methods=['post'])

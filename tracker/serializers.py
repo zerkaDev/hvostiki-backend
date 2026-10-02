@@ -2,6 +2,11 @@ from django.conf import settings
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
+from rest_framework.exceptions import ErrorDetail
+from tracker.recurrence import (
+    END_TYPES, RuleError, check_end_against_start, derive_end_type, normalize_rule, recompute_until,
+    rule_from_normalized,
+)
 from tracker.models import User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
 
 from .time_contract import get_time_contract, time_to_stored, time_to_wire
@@ -162,6 +167,8 @@ class DeviceRegistrationSerializer(serializers.Serializer):
 
 
 class RecurrenceRuleSerializer(serializers.ModelSerializer):
+    # Вычисляется из end_date / end_count; на вход можно передать явно (never/date/count)
+    end_type = serializers.ChoiceField(choices=END_TYPES, required=False)
 
     class Meta:
         model = RecurrenceRule
@@ -170,31 +177,22 @@ class RecurrenceRuleSerializer(serializers.ModelSerializer):
             'interval',
             'week_days',
             'month_days',
+            'year_dates',
+            'end_type',
             'end_date',
+            'end_count',
         )
         extra_kwargs = {
-            # interval = «каждые N дней/недель/месяцев», 0 не имеет смысла
-            'interval': {'min_value': 1},
+            # границы по периодам и согласованность полей проверяет EventSerializer.validate
+            # (по итоговому состоянию правила и дате старта события)
+            'interval': {'min_value': 1, 'required': False},
+            'end_count': {'min_value': 0},
         }
 
-    def validate(self, data):
-        frequency = data.get('frequency')
-
-        if frequency == RecurrenceFrequency.WEEKLY and not data.get('week_days'):
-            raise serializers.ValidationError('week_days required for weekly recurrence')
-
-        if frequency == RecurrenceFrequency.MONTHLY and not data.get('month_days'):
-            raise serializers.ValidationError('month_days required for monthly recurrence')
-
-        week_days = data.get('week_days') or []
-        if any(not isinstance(day, int) or not 1 <= day <= 7 for day in week_days):
-            raise serializers.ValidationError('week_days must contain values from 1 to 7')
-
-        month_days = data.get('month_days') or []
-        if any(not isinstance(day, int) or not 1 <= day <= 31 for day in month_days):
-            raise serializers.ValidationError('month_days must contain values from 1 to 31')
-
-        return data
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['end_type'] = derive_end_type(instance.end_date, instance.end_count)
+        return rep
 
 
 class EventSerializer(serializers.ModelSerializer):
@@ -213,6 +211,10 @@ class EventSerializer(serializers.ModelSerializer):
 
         if occurrence_date is None:
             occurrence_date = obj.start_date
+
+        completed = self.context.get('completed')
+        if completed is not None:
+            return (obj.id, occurrence_date) in completed
 
         return EventCompletion.objects.filter(
             event=obj,
@@ -272,7 +274,39 @@ class EventSerializer(serializers.ModelSerializer):
         if not is_recurring and recurrence:
             raise serializers.ValidationError('Non-recurring event must not include recurrence')
 
+        self._rule_state = None
+        if is_recurring:
+            start_date = data.get('start_date') or (self.instance.start_date if self.instance else None)
+            self._rule_state = self._validate_rule(recurrence, start_date)
+
         return data
+
+    def _validate_rule(self, patch, start_date):
+        """Итоговое состояние правила (instance + patch): нормализация и проверка окончания."""
+        current = self.instance.recurrence if self.instance else None
+        merged = {}
+        if current is not None:
+            merged = {
+                'frequency': current.frequency, 'interval': current.interval,
+                'week_days': current.week_days, 'month_days': current.month_days,
+                'year_dates': current.year_dates, 'end_date': current.end_date,
+                'end_count': current.end_count,
+            }
+        patch = dict(patch or {})
+        # явно переданное окончание вытесняет прежнее другого вида
+        if patch.get('end_date') is not None and 'end_count' not in patch:
+            merged['end_count'] = None
+        if patch.get('end_count') is not None and 'end_date' not in patch:
+            merged['end_date'] = None
+        merged.update(patch)
+        try:
+            state = normalize_rule(merged)
+            check_end_against_start(rule_from_normalized(state), start_date)
+        except RuleError as exc:
+            raise serializers.ValidationError({
+                exc.field or 'recurrence': [ErrorDetail(exc.message, code=exc.code)],
+            })
+        return state
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)
@@ -283,14 +317,22 @@ class EventSerializer(serializers.ModelSerializer):
             rep['time'] = time_to_wire(instance.time, instance.timezone_offset, contract).isoformat()
         
         # Добавляем полный объект питомца для чтения
-        rep['pet_obj'] = PetSerializer(instance.pet, context=self.context).data
+        cache = self.context.get('pet_data_cache')
+        if cache is None:
+            rep['pet_obj'] = PetSerializer(instance.pet, context=self.context).data
+        else:
+            if instance.pet_id not in cache:
+                cache[instance.pet_id] = PetSerializer(instance.pet, context=self.context).data
+            rep['pet_obj'] = cache[instance.pet_id]
         return rep
 
     def create(self, validated_data):
         recurrence_data = validated_data.pop('recurrence', None)
 
         if validated_data.get('is_recurring'):
-            recurrence = RecurrenceRule.objects.create(**recurrence_data)
+            recurrence = RecurrenceRule(**self._rule_state)
+            recompute_until(recurrence, validated_data['start_date'])
+            recurrence.save()
             validated_data['recurrence'] = recurrence
 
         validated_data['user'] = self.context['request'].user
@@ -305,13 +347,16 @@ class EventSerializer(serializers.ModelSerializer):
 
         # если событие стало recurring или обновило параметры повторения
         if instance.is_recurring:
+            state = self._rule_state
             if instance.recurrence:
-                if recurrence_data:
-                    for attr, value in recurrence_data.items():
-                        setattr(instance.recurrence, attr, value)
-                    instance.recurrence.save()
-            elif recurrence_data:
-                recurrence = RecurrenceRule.objects.create(**recurrence_data)
+                for attr, value in state.items():
+                    setattr(instance.recurrence, attr, value)
+                recompute_until(instance.recurrence, instance.start_date)
+                instance.recurrence.save()
+            else:
+                recurrence = RecurrenceRule(**state)
+                recompute_until(recurrence, instance.start_date)
+                recurrence.save()
                 instance.recurrence = recurrence
 
         # если убрали recurring
