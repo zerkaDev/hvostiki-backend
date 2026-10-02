@@ -222,9 +222,16 @@ class RecurrenceFrequency(models.TextChoices):
     DAILY = 'daily', 'Daily'
     WEEKLY = 'weekly', 'Weekly'
     MONTHLY = 'monthly', 'Monthly'
+    YEARLY = 'yearly', 'Yearly'
 
 
 class RecurrenceRule(models.Model):
+    """Правило повторения события (семантика вхождений — в :mod:`tracker.recurrence`).
+
+    Заполняются только поля выбранного периода; остальные ``NULL`` (сериализатор их обнуляет).
+    Окончание — ``end_date`` либо ``end_count`` (не оба); ``until`` — вычисляемая последняя дата
+    (для ``end_count`` — дата N-го вхождения-дня), нужна SQL-предфильтрам выдачи и рассылки.
+    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     frequency = models.CharField(
@@ -234,16 +241,30 @@ class RecurrenceRule(models.Model):
     interval = models.PositiveIntegerField(default=1)
 
     week_days = models.JSONField(blank=True, null=True)   # [1,4]
-    month_days = models.JSONField(blank=True, null=True)  # [5,20]
+    month_days = models.JSONField(blank=True, null=True)  # [5,20], -1 = последний день месяца
+    year_dates = models.JSONField(blank=True, null=True)  # [{"month": 3, "day": 15}]
+    # Несколько времён в день (только daily, ≥2 значений): ["08:00", "14:00"], локальное время события.
+    # При одном времени поле пустое, время хранится в Event.time.
+    times = models.JSONField(blank=True, null=True)
 
+    # Окончание: «до даты» (end_date) либо «после N повторений» (end_count); не оба сразу.
     end_date = models.DateField(blank=True, null=True)
+    end_count = models.PositiveIntegerField(blank=True, null=True)
+    # Эффективная последняя дата: end_date либо дата N-го вхождения-дня. Кэш для SQL-предфильтра
+    # (рассылки) — пересчитывается при каждом сохранении правила/даты старта события.
+    until = models.DateField(blank=True, null=True, db_index=True)
 
     def clean(self):
-        if self.frequency == RecurrenceFrequency.WEEKLY and not self.week_days:
-            raise ValidationError('week_days required for weekly recurrence')
-
-        if self.frequency == RecurrenceFrequency.MONTHLY and not self.month_days:
-            raise ValidationError('month_days required for monthly recurrence')
+        """Проверка инвариантов правила (админка/shell обходят DRF-сериализатор)."""
+        from tracker.recurrence import RuleError, normalize_rule
+        try:
+            normalize_rule({
+                'frequency': self.frequency, 'interval': self.interval,
+                'week_days': self.week_days, 'month_days': self.month_days,
+                'year_dates': self.year_dates, 'end_date': self.end_date, 'end_count': self.end_count,
+            })
+        except RuleError as exc:
+            raise ValidationError(exc.message)
 
     def __str__(self):
         return f'{self.frequency}'
@@ -304,6 +325,7 @@ class Event(models.Model):
 
 
 class EventNotificationLog(models.Model):
+    """Журнал отправленных уведомлений: защита от дублей по ``(событие, дата, слот, тип)``."""
     event = models.ForeignKey('Event', on_delete=models.CASCADE)
     occurrence_date = models.DateField()
     notification_type = models.CharField(
@@ -311,19 +333,40 @@ class EventNotificationLog(models.Model):
         choices=EventNotificationType.choices,
         default=EventNotificationType.STANDARD
     )
+    # Слот времени при нескольких временах в день; NULL — обычное событие (одно время / весь день)
+    occurrence_time = models.TimeField(null=True, blank=True)
     sent_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('event', 'occurrence_date', 'notification_type')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['event', 'occurrence_date', 'occurrence_time', 'notification_type'],
+                nulls_distinct=False,
+                name='uniq_notification_slot',
+            ),
+        ]
 
 
 class EventCompletion(models.Model):
+    """Отметка «выполнено» на конкретное вхождение: дата и, при нескольких временах в день, слот.
+
+    ``occurrence_time = NULL`` — одно время / весь день (как раньше); в многослотовом режиме такая
+    отметка относится к первому слоту.
+    """
     event = models.ForeignKey('Event', on_delete=models.CASCADE)
     occurrence_date = models.DateField()
+    # Слот времени при нескольких временах в день; NULL — одно время / весь день (как раньше)
+    occurrence_time = models.TimeField(null=True, blank=True)
     done_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('event', 'occurrence_date')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['event', 'occurrence_date', 'occurrence_time'],
+                nulls_distinct=False,
+                name='uniq_completion_slot',
+            ),
+        ]
 
 
 class FCMDevice(models.Model):

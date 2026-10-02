@@ -1,10 +1,17 @@
 from django.conf import settings
+from django.db.models import Q
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
+from rest_framework.exceptions import ErrorDetail
+from tracker.recurrence import (
+    END_TYPES, RuleError, check_end_against_start, derive_end_type, normalize_rule, normalize_times,
+    parse_stored_times, recompute_until, rule_from_normalized,
+)
 from tracker.models import User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
 
-from .utils import normalize_phone, shift_time_by_minutes
+from .event_time import time_to_stored, time_to_wire
+from .utils import normalize_phone
 
 
 class PhoneNumberSerializer(serializers.Serializer):
@@ -161,6 +168,18 @@ class DeviceRegistrationSerializer(serializers.Serializer):
 
 
 class RecurrenceRuleSerializer(serializers.ModelSerializer):
+    """Правило повторения во вложенном поле ``recurrence``.
+
+    Здесь только разбор полей; согласованность (границы, обнуление чужих периодов, окончание,
+    слоты) проверяет :meth:`EventSerializer.validate` по итоговому состоянию правила. ``end_type``
+    в ответе вычисляется из ``end_date`` / ``end_count``.
+    """
+    # Вычисляется из end_date / end_count; на вход можно передать явно (never/date/count)
+    end_type = serializers.ChoiceField(choices=END_TYPES, required=False)
+    # «HH:MM»; на проводе — UTC, в БД — локальное время события
+    times = serializers.ListField(
+        child=serializers.TimeField(), required=False, allow_null=True, allow_empty=True,
+    )
 
     class Meta:
         model = RecurrenceRule
@@ -169,34 +188,32 @@ class RecurrenceRuleSerializer(serializers.ModelSerializer):
             'interval',
             'week_days',
             'month_days',
+            'year_dates',
+            'times',
+            'end_type',
             'end_date',
+            'end_count',
         )
         extra_kwargs = {
-            # interval = «каждые N дней/недель/месяцев», 0 не имеет смысла
-            'interval': {'min_value': 1},
+            # границы по периодам и согласованность полей проверяет EventSerializer.validate
+            # (по итоговому состоянию правила и дате старта события)
+            'interval': {'min_value': 1, 'required': False},
+            'end_count': {'min_value': 0},
         }
 
-    def validate(self, data):
-        frequency = data.get('frequency')
-
-        if frequency == RecurrenceFrequency.WEEKLY and not data.get('week_days'):
-            raise serializers.ValidationError('week_days required for weekly recurrence')
-
-        if frequency == RecurrenceFrequency.MONTHLY and not data.get('month_days'):
-            raise serializers.ValidationError('month_days required for monthly recurrence')
-
-        week_days = data.get('week_days') or []
-        if any(not isinstance(day, int) or not 1 <= day <= 7 for day in week_days):
-            raise serializers.ValidationError('week_days must contain values from 1 to 7')
-
-        month_days = data.get('month_days') or []
-        if any(not isinstance(day, int) or not 1 <= day <= 31 for day in month_days):
-            raise serializers.ValidationError('month_days must contain values from 1 to 31')
-
-        return data
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['end_type'] = derive_end_type(instance.end_date, instance.end_count)
+        return rep
 
 
 class EventSerializer(serializers.ModelSerializer):
+    """Событие питомца с вложенным правилом повторения.
+
+    Время на проводе — UTC, в БД — локальное (``tracker/event_time.py``). ``done`` вычисляется по
+    вхождению из контекста (``occurrence_date``, ``occurrence_time``, набор ``completed``). В списках
+    (``include_pet_obj = False``) ``pet_obj`` не добавляется.
+    """
     recurrence = RecurrenceRuleSerializer(required=False, allow_null=True)
     # В запросах ждём time в UTC+0 и timezone_offset (минуты).
     timezone_offset = serializers.IntegerField(required=False)
@@ -213,10 +230,22 @@ class EventSerializer(serializers.ModelSerializer):
         if occurrence_date is None:
             occurrence_date = obj.start_date
 
-        return EventCompletion.objects.filter(
-            event=obj,
-            occurrence_date=occurrence_date,
-        ).exists()
+        # Слот времени вхождения (только при нескольких временах в день), иначе None
+        slot = self.context.get('occurrence_time')
+        # Старая отметка без времени (NULL) в многослотовом режиме относится к первому слоту
+        legacy_slot = slot is not None and slot == obj.time
+
+        completed = self.context.get('completed')
+        if completed is not None:
+            return (obj.id, occurrence_date, slot) in completed or (
+                legacy_slot and (obj.id, occurrence_date, None) in completed
+            )
+
+        query = EventCompletion.objects.filter(event=obj, occurrence_date=occurrence_date)
+        if slot is None:
+            return query.filter(occurrence_time__isnull=True).exists()
+        flt = Q(occurrence_time=slot) | (Q(occurrence_time__isnull=True) if legacy_slot else Q())
+        return query.filter(flt).exists()
 
     class Meta:
         model = Event
@@ -247,7 +276,14 @@ class EventSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, data):
-        # Клиент присылает time в UTC+0. В базе храним локальное время (UTC + timezone_offset)
+        """Переводит время в локальное и проверяет правило повторения по итоговому состоянию.
+
+        Итоговое состояние = текущее правило события + переданные поля (PATCH), поэтому проверки
+        работают и при смене только ``start_date`` или периода. Ошибки — 400 с кодом
+        (``end_before_start``, ``end_before_first`` и др.).
+        """
+        # В базе время всегда локальное (UTC + timezone_offset). Что присылает клиент —
+        # API принимает время в UTC — переводим в локальное.
         if self.instance is None and data.get('timezone_offset') is None:
             raise serializers.ValidationError(
                 {'timezone_offset': 'timezone_offset is required (minutes offset relative to UTC).'}
@@ -258,7 +294,7 @@ class EventSerializer(serializers.ModelSerializer):
             effective_offset = self.instance.timezone_offset
 
         if effective_offset is not None and 'time' in data and data['time'] is not None:
-            data['time'] = shift_time_by_minutes(data['time'], effective_offset)
+            data['time'] = time_to_stored(data['time'], effective_offset)
 
         is_recurring = data.get('is_recurring', self.instance.is_recurring if self.instance else False)
         recurrence = data.get('recurrence')
@@ -269,30 +305,100 @@ class EventSerializer(serializers.ModelSerializer):
         if not is_recurring and recurrence:
             raise serializers.ValidationError('Non-recurring event must not include recurrence')
 
+        self._rule_state = None
+        if is_recurring:
+            start_date = data.get('start_date') or (self.instance.start_date if self.instance else None)
+            self._rule_state = self._validate_rule(recurrence, start_date, data, effective_offset)
+
         return data
 
+    def _validate_rule(self, patch, start_date, data, offset):
+        """Итоговое состояние правила (instance + patch): нормализация и проверка окончания."""
+        current = self.instance.recurrence if self.instance else None
+        merged = {}
+        if current is not None:
+            merged = {
+                'frequency': current.frequency, 'interval': current.interval,
+                'week_days': current.week_days, 'month_days': current.month_days,
+                'year_dates': current.year_dates, 'end_date': current.end_date,
+                'end_count': current.end_count,
+            }
+        patch = dict(patch or {})
+        # явно переданное окончание вытесняет прежнее другого вида
+        if patch.get('end_date') is not None and 'end_count' not in patch:
+            merged['end_count'] = None
+        if patch.get('end_count') is not None and 'end_date' not in patch:
+            merged['end_date'] = None
+        merged.update(patch)
+        try:
+            state = normalize_rule(merged)
+            check_end_against_start(rule_from_normalized(state), start_date)
+            self._apply_times(state, patch, current, data, offset)
+        except RuleError as exc:
+            raise serializers.ValidationError({
+                exc.field or 'recurrence': [ErrorDetail(exc.message, code=exc.code)],
+            })
+        return state
+
+    def _apply_times(self, state, patch, current, data, offset):
+        """Слоты времени: в БД — локальные; ``Event.time`` согласуется с первым слотом."""
+        from_patch = patch.get('times') is not None
+        if from_patch:
+            raw = [time_to_stored(t, offset) for t in patch['times']]
+        elif current is not None:
+            raw = parse_stored_times(current.times)
+        else:
+            raw = []
+
+        event_time = data['time'] if 'time' in data else (self.instance.time if self.instance else None)
+        times, new_time = normalize_times(state['frequency'], raw, event_time)
+
+        if times and not from_patch and 'time' in data and data['time'].replace(second=0, microsecond=0) != new_time:
+            raise RuleError(
+                'time_conflicts_with_times',
+                'Время события задаётся списком времён в правиле (recurrence.times)',
+                field='time',
+            )
+        state['times'] = times
+        if raw and state['frequency'] == 'daily':
+            data['time'] = new_time
+
     def to_representation(self, instance):
+        """Время слота (из контекста) или события отдаётся в UTC; ``recurrence.times`` — тоже в UTC."""
         rep = super().to_representation(instance)
 
-        # Возвращаем time как UTC+0
-        if instance.time is not None:
-            rep['time'] = shift_time_by_minutes(instance.time, -instance.timezone_offset).isoformat()
-        
-        # Добавляем полный объект питомца для чтения
-        rep['pet_obj'] = PetSerializer(instance.pet, context=self.context).data
+        # Отдаём время в UTC+0.
+        # В списках вхождение может относиться к слоту (несколько времён в день) — его время в контексте.
+        shown_time = self.context.get('slot_time', instance.time)
+        if shown_time is not None:
+            rep['time'] = time_to_wire(shown_time, instance.timezone_offset).isoformat()
+        if rep.get('recurrence') and instance.recurrence and instance.recurrence.times:
+            rep['recurrence']['times'] = [
+                time_to_wire(t, instance.timezone_offset).strftime('%H:%M')
+                for t in parse_stored_times(instance.recurrence.times)
+            ]
+
+        # В списках (/period/, /upcoming/) питомец не дублируется в каждом вхождении: клиент
+        # берёт его по `pet` (id) из своего списка питомцев. В одиночных ответах pet_obj остаётся.
+        if self.context.get('include_pet_obj', True):
+            rep['pet_obj'] = PetSerializer(instance.pet, context=self.context).data
         return rep
 
     def create(self, validated_data):
+        """Создаёт событие и правило; ``until`` вычисляется до сохранения."""
         recurrence_data = validated_data.pop('recurrence', None)
 
         if validated_data.get('is_recurring'):
-            recurrence = RecurrenceRule.objects.create(**recurrence_data)
+            recurrence = RecurrenceRule(**self._rule_state)
+            recompute_until(recurrence, validated_data['start_date'])
+            recurrence.save()
             validated_data['recurrence'] = recurrence
 
         validated_data['user'] = self.context['request'].user
         return Event.objects.create(**validated_data)
 
     def update(self, instance, validated_data):
+        """Обновляет событие и правило; ``until`` пересчитывается (в т.ч. при смене ``start_date``)."""
         recurrence_data = validated_data.pop('recurrence', None)
 
         # обновляем простые поля
@@ -301,13 +407,16 @@ class EventSerializer(serializers.ModelSerializer):
 
         # если событие стало recurring или обновило параметры повторения
         if instance.is_recurring:
+            state = self._rule_state
             if instance.recurrence:
-                if recurrence_data:
-                    for attr, value in recurrence_data.items():
-                        setattr(instance.recurrence, attr, value)
-                    instance.recurrence.save()
-            elif recurrence_data:
-                recurrence = RecurrenceRule.objects.create(**recurrence_data)
+                for attr, value in state.items():
+                    setattr(instance.recurrence, attr, value)
+                recompute_until(instance.recurrence, instance.start_date)
+                instance.recurrence.save()
+            else:
+                recurrence = RecurrenceRule(**state)
+                recompute_until(recurrence, instance.start_date)
+                recurrence.save()
                 instance.recurrence = recurrence
 
         # если убрали recurring

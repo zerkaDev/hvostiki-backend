@@ -28,7 +28,7 @@ class PetAdmin(admin.ModelAdmin):
 
 @admin.register(RecurrenceRule)
 class RecurrenceRuleAdmin(admin.ModelAdmin):
-    list_display = ('frequency', 'interval', 'end_date')
+    list_display = ('frequency', 'interval', 'end_date', 'end_count', 'until')
     list_filter = ('frequency',)
 
 

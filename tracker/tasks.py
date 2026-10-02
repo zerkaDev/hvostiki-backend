@@ -1,18 +1,24 @@
 from celery import shared_task
 from django.core.management import call_command
 from django.utils import timezone
+import logging
 from datetime import datetime, time, timedelta
+from django.db import IntegrityError, transaction
+from django.db.models import Q
 
 from tracker.models import Event, EventNotificationLog, EventCompletion, EventNotificationType, RecurrenceFrequency, FCMDevice
 
 from tracker.services.ucalles_service import UCallerService
 from tracker.services.firebase_service import firebase_service
+from tracker.recurrence import event_slots
 from tracker.utils import generate_occurrences
 
 # Beat и воркер могут сработать с задержкой, поэтому уведомление считается
 # актуальным, если целевой момент наступил не более NOTIFICATION_LOOKBACK назад.
 # Повторные отправки отсекает EventNotificationLog.
 NOTIFICATION_LOOKBACK = timedelta(minutes=2)
+
+logger = logging.getLogger(__name__)
 
 
 def _is_due(target: datetime, now_local: datetime) -> bool:
@@ -35,88 +41,146 @@ def flush_expired_tokens():
 
 @shared_task
 def send_event_notifications():
+    """Рассылает пуши по событиям (запускается beat каждую минуту).
+
+    Кандидатов отбирает SQL-предфильтр по дате старта и ``RecurrenceRule.until`` (законченные и
+    ещё не начавшиеся события не проверяются). Сбой одного события логируется и не останавливает
+    рассылку остальным.
+    """
     now_utc = timezone.now()
-    # Загружаем события с питомцами и пользователями
-    events = Event.objects.select_related('recurrence', 'pet', 'user').all()
-
-    for event in events:
-        # Локальное «настенное» время пользователя
-        now_local = (now_utc + timedelta(minutes=event.timezone_offset)).replace(tzinfo=None)
-
-        is_daily = (
-            event.is_recurring and
-            event.recurrence and
-            event.recurrence.frequency == RecurrenceFrequency.DAILY
+    # Сутки в любом часовом поясе: [now-14ч .. now+14ч] даёт локальные даты не шире ±1 дня от UTC.
+    # Отсекаем в SQL события, которые заведомо закончились или ещё не начались.
+    today_utc = now_utc.date()
+    events = (
+        Event.objects.select_related('recurrence', 'pet', 'user')
+        .filter(start_date__lte=today_utc + timedelta(days=2))
+        .filter(
+            Q(is_recurring=False, start_date__gte=today_utc - timedelta(days=2))
+            | Q(is_recurring=True) & (
+                Q(recurrence__until__isnull=True, recurrence__end_date__isnull=True)
+                | Q(recurrence__until__gte=today_utc - timedelta(days=2))
+                | Q(recurrence__until__isnull=True, recurrence__end_date__gte=today_utc - timedelta(days=2))
+            )
         )
+    )
 
-        notification_type = None
-        occurrence_date = None
+    for event in events.iterator():
+        # Сбой одного события (битые данные, ошибка FCM) не должен останавливать рассылку остальным
+        try:
+            _notify_event(event, now_utc)
+        except Exception:
+            logger.exception('send_event_notifications: сбой по событию %s', event.id)
 
-        # Смотрим текущие и предыдущие сутки: рассылка могла задержаться и
-        # сработать уже после полуночи.
-        for day in (now_local.date(), (now_local - timedelta(days=1)).date()):
-            if event.time is not None:
-                # Scenario A: событие со временем
-                if _is_due(datetime.combine(day, event.time), now_local):
-                    notification_type = EventNotificationType.STANDARD
-                    occurrence_date = day
-                    break
-                continue
 
-            if _is_due(datetime.combine(day, time(8, 0)), now_local):
-                # Scenario B & C (Final): 8:00 дня события
-                notification_type = EventNotificationType.FINAL
+def _notify_event(event, now_utc):
+    """Уведомления по всем слотам времени события (см. :func:`tracker.recurrence.event_slots`).
+
+    Каждый слот обрабатывается независимо: сбой одного не лишает уведомления остальные.
+    """
+    slots = event_slots(event)
+    for slot in slots:
+        # Сбой одного слота не должен лишать уведомления остальные слоты того же события
+        try:
+            _notify_slot(event, slot, len(slots) > 1, now_utc)
+        except Exception:
+            logger.exception('send_event_notifications: сбой по событию %s, слот %s', event.id, slot)
+
+
+def _notify_slot(event, slot_time, multi_slot, now_utc):
+    """Уведомление по одному слоту события, если его момент попал в окно ``NOTIFICATION_LOOKBACK``.
+
+    ``slot_time`` — локальное время слота (``None`` — событие «весь день»: пуши в 08:00 и накануне в 21:00).
+    ``multi_slot`` — у события несколько времён в день: тогда отметка выполнения и запись лога привязаны
+    к слоту (``occurrence_time``), а в данных пуша есть ``time``. Запись лога «занимается» до отправки
+    (уникальный индекс защищает от дублей между воркерами) и снимается, если отправка упала.
+    """
+    # Локальное «настенное» время пользователя
+    now_local = (now_utc + timedelta(minutes=event.timezone_offset)).replace(tzinfo=None)
+
+    is_daily = (
+        event.is_recurring and
+        event.recurrence and
+        event.recurrence.frequency == RecurrenceFrequency.DAILY
+    )
+
+    notification_type = None
+    occurrence_date = None
+
+    # Смотрим текущие и предыдущие сутки: рассылка могла задержаться и
+    # сработать уже после полуночи.
+    for day in (now_local.date(), (now_local - timedelta(days=1)).date()):
+        if slot_time is not None:
+            # Scenario A: событие со временем (или один из слотов времени в день)
+            if _is_due(datetime.combine(day, slot_time), now_local):
+                notification_type = EventNotificationType.STANDARD
                 occurrence_date = day
                 break
-
-            if not is_daily and _is_due(datetime.combine(day, time(21, 0)), now_local):
-                # Scenario C (Reminder): 21:00 накануне
-                notification_type = EventNotificationType.REMINDER
-                occurrence_date = day + timedelta(days=1)
-                break
-
-        if not notification_type:
             continue
 
-        # Проверяем, есть ли occurrence в целевую дату
-        occurrences = generate_occurrences(event, occurrence_date, occurrence_date)
-        if not occurrences:
-            continue
+        if _is_due(datetime.combine(day, time(8, 0)), now_local):
+            # Scenario B & C (Final): 8:00 дня события
+            notification_type = EventNotificationType.FINAL
+            occurrence_date = day
+            break
 
-        # Проверяем, не выполнено ли уже
-        if EventCompletion.objects.filter(event=event, occurrence_date=occurrence_date).exists():
-            continue
+        if not is_daily and _is_due(datetime.combine(day, time(21, 0)), now_local):
+            # Scenario C (Reminder): 21:00 накануне
+            notification_type = EventNotificationType.REMINDER
+            occurrence_date = day + timedelta(days=1)
+            break
 
-        # Проверяем, не отправляли ли уже такой тип уведомления для этой даты
-        already_sent = EventNotificationLog.objects.filter(
-            event=event,
-            occurrence_date=occurrence_date,
-            notification_type=notification_type
-        ).exists()
+    if not notification_type:
+        return
 
-        if already_sent:
-            continue
+    # Проверяем, есть ли occurrence в целевую дату
+    if not generate_occurrences(event, occurrence_date, occurrence_date):
+        return
 
-        # Формируем текст уведомления
-        title = f"{event.pet.name}: {event.title}"
-        if notification_type == EventNotificationType.REMINDER:
-            body = f"Напоминание: завтра в плане {event.title}"
-        else:
-            body = event.description or f"Пора выполнить: {event.title}"
+    # Проверяем, не выполнено ли уже
+    occurrence_time = slot_time if multi_slot else None
+    done = EventCompletion.objects.filter(event=event, occurrence_date=occurrence_date)
+    if multi_slot:
+        # старая отметка без слота (NULL) относится к первому слоту
+        slot_filter = Q(occurrence_time=slot_time)
+        if slot_time == event.time:
+            slot_filter |= Q(occurrence_time__isnull=True)
+        done = done.filter(slot_filter)
+    if done.exists():
+        return
 
+    # «Занимаем» запись лога ДО отправки: уникальный индекс не даёт двум воркерам/запускам
+    # отправить одно и то же уведомление дважды. Если отправка упадёт — запись снимаем.
+    try:
+        with transaction.atomic():
+            log = EventNotificationLog.objects.create(
+                event=event,
+                occurrence_date=occurrence_date,
+                occurrence_time=occurrence_time,
+                notification_type=notification_type,
+            )
+    except IntegrityError:
+        return
+
+    # Формируем текст уведомления
+    title = f"{event.pet.name}: {event.title}"
+    if notification_type == EventNotificationType.REMINDER:
+        body = f"Напоминание: завтра в плане {event.title}"
+    else:
+        body = event.description or f"Пора выполнить: {event.title}"
+
+    try:
         # Отправка пуша на все устройства пользователя
-        devices = FCMDevice.objects.filter(user=event.user)
-        for device in devices:
+        for device in FCMDevice.objects.filter(user=event.user):
             firebase_service.send_push_notification(
                 token=device.fcm_token,
                 title=title,
                 body=body,
-                data={'event_id': str(event.id), 'type': notification_type}
+                data={
+                    'event_id': str(event.id),
+                    'type': notification_type,
+                    **({'time': slot_time.strftime('%H:%M')} if multi_slot else {}),
+                },
             )
-
-        # Логируем
-        EventNotificationLog.objects.create(
-            event=event,
-            occurrence_date=occurrence_date,
-            notification_type=notification_type
-        )
+    except Exception:
+        log.delete()  # следующий запуск (в пределах окна) попробует снова
+        raise

@@ -258,6 +258,7 @@ PET_VIEWSET_SCHEMAS = {
             - Учитываются повторяющиеся события: в ответе дата конкретного вхождения
             - Поле `done` считается для каждой даты отдельно
             - Чужой питомец возвращает 404
+            - Поле `time` — в UTC
             """,
         parameters=[
             OpenApiParameter(
@@ -334,9 +335,20 @@ BREED_LIST_SCHEMA = extend_schema(
 # --- Events ---
 
 EVENT_VIEWSET_SCHEMAS = {
+    'retrieve': extend_schema(
+        summary='Получить событие',
+        description='Поле `time` — в UTC.',
+    ),
+    'update': extend_schema(
+        summary='Обновить событие',
+        description='Полное обновление. Поле `time` — в UTC (сервер хранит локальное: `UTC + timezone_offset`).',
+    ),
+    'partial_update': extend_schema(
+        summary='Частично обновить событие',
+        description='Поле `time` — в UTC (сервер хранит локальное: `UTC + timezone_offset`).',
+    ),
     'create': extend_schema(
         summary='Создать событие',
-        description='Создает одноразовое или повторяющееся событие',
         request=EventSerializer,
         responses={201: EventSerializer},
         examples=[
@@ -358,8 +370,29 @@ EVENT_VIEWSET_SCHEMAS = {
                     }
                 },
                 request_only=True,
-            )
+            ),
+            OpenApiExample(
+                name='Recurring yearly with end after N repeats',
+                value={
+                    'pet': 1, 'type': 'custom', 'title': 'Прививка', 'start_date': '2026-10-05',
+                    'timezone_offset': 180, 'is_recurring': True,
+                    'recurrence': {
+                        'frequency': 'yearly', 'interval': 1,
+                        'year_dates': [{'month': 3, 'day': 15}],
+                        'end_type': 'count', 'end_count': 5,
+                    },
+                },
+                request_only=True,
+            ),
         ],
+        description=(
+            'Создает одноразовое или повторяющееся событие. Поле `time` — в UTC (сервер хранит локальное: `UTC + timezone_offset`).\n\n'
+            'Правило `recurrence`: `frequency` (daily/weekly/monthly/yearly), `interval` (дни 1–30, недели/месяцы 1–12, '
+            'годы 1–10), `week_days` (1–7), `month_days` (1–31 или -1 — последний день), `year_dates` '
+            '([{month, day}]), окончание: `end_date` либо `end_count` (2–999), `end_type` (never/date/count) '
+            'вычисляется. `times` (только daily, 1–6 значений «HH:MM» в UTC) — '
+            'несколько времён в день; `Event.time` становится первым слотом. Поля чужих периодов обнуляются. Ошибки окончания: коды `end_before_start`, `end_before_first`.'
+        ),
     ),
     'period': extend_schema(
         summary='Получить события за период',
@@ -367,6 +400,7 @@ EVENT_VIEWSET_SCHEMAS = {
             Возвращает словарь событий, сгруппированный по датам. 
             Ключ — дата в формате YYYY-MM-DD, значение — список событий в эту дату.
             Словарь отсортирован по датам, события внутри даты — по времени.
+            Ограничения: период не больше 400 дней, `date_from` ≤ `date_to`, не более 10 000 вхождений (иначе 400).
             """,
         parameters=[
             OpenApiParameter(name='date_from', type=OpenApiTypes.DATE, location=OpenApiParameter.QUERY, required=True),
@@ -403,6 +437,8 @@ EVENT_VIEWSET_SCHEMAS = {
                 - Для одноразового события передавайте его start_date
                 - Для повторяющегося — дату конкретного occurrence
                 - Повторный вызов безопасен (idempotent)
+                - Если у события несколько времён в день (`recurrence.times`), обязательно передайте `time`
+                  (в UTC, как `time` события); без него или с несуществующим слотом — 400
                 """,
         request=OpenApiTypes.OBJECT,
         responses={
@@ -421,6 +457,7 @@ EVENT_VIEWSET_SCHEMAS = {
         summary='Отменить выполнение события',
         description="""
                 Удаляет отметку о выполнении для конкретного occurrence события.
+                При нескольких временах в день нужен `time` слота (см. mark_done).
                 """,
         request=OpenApiTypes.OBJECT,
         responses={
