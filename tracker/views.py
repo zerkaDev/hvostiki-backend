@@ -123,6 +123,7 @@ def group_occurrences(events, date_from, date_to, serializer_class, serializer_c
 
 
 def _limit_error_response():
+    """400 с понятным ``detail``, когда вхождений в ответе больше допустимого."""
     return Response(
         {'detail': 'Слишком много событий в выбранном периоде. Сократите период.'},
         status=status.HTTP_400_BAD_REQUEST,

@@ -226,6 +226,12 @@ class RecurrenceFrequency(models.TextChoices):
 
 
 class RecurrenceRule(models.Model):
+    """Правило повторения события (семантика вхождений — в :mod:`tracker.recurrence`).
+
+    Заполняются только поля выбранного периода; остальные ``NULL`` (сериализатор их обнуляет).
+    Окончание — ``end_date`` либо ``end_count`` (не оба); ``until`` — вычисляемая последняя дата
+    (для ``end_count`` — дата N-го вхождения-дня), нужна SQL-предфильтрам выдачи и рассылки.
+    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     frequency = models.CharField(
@@ -249,6 +255,7 @@ class RecurrenceRule(models.Model):
     until = models.DateField(blank=True, null=True, db_index=True)
 
     def clean(self):
+        """Проверка инвариантов правила (админка/shell обходят DRF-сериализатор)."""
         from tracker.recurrence import RuleError, normalize_rule
         try:
             normalize_rule({
@@ -318,6 +325,7 @@ class Event(models.Model):
 
 
 class EventNotificationLog(models.Model):
+    """Журнал отправленных уведомлений: защита от дублей по ``(событие, дата, слот, тип)``."""
     event = models.ForeignKey('Event', on_delete=models.CASCADE)
     occurrence_date = models.DateField()
     notification_type = models.CharField(
@@ -340,6 +348,11 @@ class EventNotificationLog(models.Model):
 
 
 class EventCompletion(models.Model):
+    """Отметка «выполнено» на конкретное вхождение: дата и, при нескольких временах в день, слот.
+
+    ``occurrence_time = NULL`` — одно время / весь день (как раньше); в многослотовом режиме такая
+    отметка относится к первому слоту.
+    """
     event = models.ForeignKey('Event', on_delete=models.CASCADE)
     occurrence_date = models.DateField()
     # Слот времени при нескольких временах в день; NULL — одно время / весь день (как раньше)

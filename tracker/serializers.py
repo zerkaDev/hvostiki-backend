@@ -168,6 +168,12 @@ class DeviceRegistrationSerializer(serializers.Serializer):
 
 
 class RecurrenceRuleSerializer(serializers.ModelSerializer):
+    """Правило повторения во вложенном поле ``recurrence``.
+
+    Здесь только разбор полей; согласованность (границы, обнуление чужих периодов, окончание,
+    слоты) проверяет :meth:`EventSerializer.validate` по итоговому состоянию правила. ``end_type``
+    в ответе вычисляется из ``end_date`` / ``end_count``.
+    """
     # Вычисляется из end_date / end_count; на вход можно передать явно (never/date/count)
     end_type = serializers.ChoiceField(choices=END_TYPES, required=False)
     # «HH:MM»; на проводе — UTC, в БД — локальное время события
@@ -202,6 +208,12 @@ class RecurrenceRuleSerializer(serializers.ModelSerializer):
 
 
 class EventSerializer(serializers.ModelSerializer):
+    """Событие питомца с вложенным правилом повторения.
+
+    Время на проводе — UTC, в БД — локальное (``tracker/event_time.py``). ``done`` вычисляется по
+    вхождению из контекста (``occurrence_date``, ``occurrence_time``, набор ``completed``). В списках
+    (``include_pet_obj = False``) ``pet_obj`` не добавляется.
+    """
     recurrence = RecurrenceRuleSerializer(required=False, allow_null=True)
     # В запросах ждём time в UTC+0 и timezone_offset (минуты).
     timezone_offset = serializers.IntegerField(required=False)
@@ -264,6 +276,12 @@ class EventSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, data):
+        """Переводит время в локальное и проверяет правило повторения по итоговому состоянию.
+
+        Итоговое состояние = текущее правило события + переданные поля (PATCH), поэтому проверки
+        работают и при смене только ``start_date`` или периода. Ошибки — 400 с кодом
+        (``end_before_start``, ``end_before_first`` и др.).
+        """
         # В базе время всегда локальное (UTC + timezone_offset). Что присылает клиент —
         # API принимает время в UTC — переводим в локальное.
         if self.instance is None and data.get('timezone_offset') is None:
@@ -346,6 +364,7 @@ class EventSerializer(serializers.ModelSerializer):
             data['time'] = new_time
 
     def to_representation(self, instance):
+        """Время слота (из контекста) или события отдаётся в UTC; ``recurrence.times`` — тоже в UTC."""
         rep = super().to_representation(instance)
 
         # Отдаём время в UTC+0.
@@ -366,6 +385,7 @@ class EventSerializer(serializers.ModelSerializer):
         return rep
 
     def create(self, validated_data):
+        """Создаёт событие и правило; ``until`` вычисляется до сохранения."""
         recurrence_data = validated_data.pop('recurrence', None)
 
         if validated_data.get('is_recurring'):
@@ -378,6 +398,7 @@ class EventSerializer(serializers.ModelSerializer):
         return Event.objects.create(**validated_data)
 
     def update(self, instance, validated_data):
+        """Обновляет событие и правило; ``until`` пересчитывается (в т.ч. при смене ``start_date``)."""
         recurrence_data = validated_data.pop('recurrence', None)
 
         # обновляем простые поля

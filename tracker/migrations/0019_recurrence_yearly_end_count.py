@@ -1,8 +1,13 @@
+"""Годовые повторения и окончание по числу повторений.
+
+Добавляет ``yearly``, ``year_dates``, ``end_count``, ``until`` (+ заполнение ``until`` из ``end_date``).
+"""
 from django.db import migrations, models
 from django.db.models import F
 
 
 def fill_until(apps, schema_editor):
+    """Для существующих правил с ``end_date`` кэш ``until`` равен этой дате."""
     RecurrenceRule = apps.get_model('tracker', 'RecurrenceRule')
     RecurrenceRule.objects.filter(end_date__isnull=False).update(until=F('end_date'))
 

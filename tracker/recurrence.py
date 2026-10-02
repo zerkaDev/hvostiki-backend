@@ -53,6 +53,13 @@ class RuleError(Exception):
 
 @dataclass(frozen=True)
 class Rule:
+    """Неизменяемое правило повторения для движка (без обращений к БД).
+
+    ``week_days`` — 1..7 (Пн = 1), ``month_days`` — 1..31 и ``-1`` («последний день»),
+    ``year_dates`` — пары ``(месяц, день)`` без года. Лишние для периода поля игнорируются.
+    Собирается из модели (:meth:`from_model`) или из результата :func:`normalize_rule`.
+    """
+
     frequency: str
     interval: int = 1
     week_days: tuple = ()
@@ -82,22 +89,28 @@ class Rule:
 
 
 def _is_int(value):
+    """``int``, но не ``bool`` (``True`` в JSON не должно проходить как число)."""
     return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _valid_month_day(month, day):
+    """Существующая календарная дата без года (29.02 допустимо)."""
     return _is_int(month) and _is_int(day) and 1 <= month <= 12 and 1 <= day <= calendar.monthrange(2000, month)[1]
 
 
 def _last_dom(year, month):
+    """Последний день месяца (число)."""
     return calendar.monthrange(year, month)[1]
 
 
 def _monday(day):
+    """Понедельник недели, в которую входит ``day``."""
     return day - timedelta(days=day.isoweekday() - 1)
 
 
 def _month_dates(year, month, month_days):
+    """Даты месяца по правилу: числа 29–31 переносятся на последний день, ``-1`` — последний день;
+    совпавшие даты сливаются."""
     last = _last_dom(year, month)
     return sorted({
         date(year, month, last if d == LAST_DAY else min(d, last)) for d in month_days
@@ -105,10 +118,12 @@ def _month_dates(year, month, month_days):
 
 
 def _year_dates_in(year, year_dates):
+    """Даты года по правилу; 29.02 в невисокосный год → 28.02."""
     return sorted({date(year, m, min(d, _last_dom(year, m))) for m, d in year_dates})
 
 
 def _has_feb29(rule):
+    """Есть ли среди дат года 29 февраля (влияет на выбор якорного года при ``interval > 1``)."""
     return (2, 29) in rule.year_dates
 
 
@@ -156,6 +171,7 @@ def _anchor(rule, start):
 
 
 def _period_dates(rule, anchor, k):
+    """Даты ``k``-го допустимого периода (``якорь + k × interval``) в порядке возрастания."""
     step = rule.interval
     if rule.frequency == DAILY:
         return [anchor + timedelta(days=k * step)]
@@ -255,6 +271,7 @@ def check_end_against_start(rule: Rule, start: date):
 
 
 def derive_end_type(end_date, end_count):
+    """Вид окончания для ответа API: ``date`` / ``count`` / ``never`` (хранится не он, а поля)."""
     if end_date is not None:
         return END_DATE
     if end_count:
