@@ -5,6 +5,11 @@ from .views import (
     SendCodeView,
     VerifyCodeView,
     ProfileView,
+    ProfileAvatarView,
+    DeleteAccountSendCodeView,
+    DeleteAccountView,
+    FeedbackView,
+    NotificationSettingsView,
     LogoutView,
     PetViewSet, RefreshTokenView, BreedListAPIView, EventViewSet,
     RegisterDeviceView
@@ -22,6 +27,11 @@ urlpatterns = [
     path('devices/register/', RegisterDeviceView.as_view(), name='register_device'),
     # Профиль
     path('profile/', ProfileView.as_view(), name='profile'),
+    path('profile/notification-settings/', NotificationSettingsView.as_view(), name='profile-notification-settings'),
+    path('profile/avatar/', ProfileAvatarView.as_view(), name='profile-avatar'),
+    path('profile/delete/send-code/', DeleteAccountSendCodeView.as_view(), name='profile-delete-send-code'),
+    path('profile/delete/', DeleteAccountView.as_view(), name='profile-delete'),
+    path('feedback/', FeedbackView.as_view(), name='feedback'),
     path('breeds/', BreedListAPIView.as_view(), name='breed-list'),
     path('', include(router.urls)),
 ]

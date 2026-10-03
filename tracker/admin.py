@@ -1,14 +1,14 @@
 from django.contrib import admin
 from tracker.models import (
     User, Breed, Pet, RecurrenceRule, Event,
-    EventNotificationLog, EventCompletion
+    EventNotificationLog, EventCompletion, Feedback
 )
 
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
-    list_display = ('phone_number', 'is_active', 'is_verified', 'is_staff', 'created_at')
-    search_fields = ('phone_number',)
+    list_display = ('phone_number', 'name', 'is_active', 'is_verified', 'is_staff', 'created_at')
+    search_fields = ('phone_number', 'name')
     list_filter = ('is_active', 'is_verified', 'is_staff')
 
 
@@ -28,7 +28,7 @@ class PetAdmin(admin.ModelAdmin):
 
 @admin.register(RecurrenceRule)
 class RecurrenceRuleAdmin(admin.ModelAdmin):
-    list_display = ('frequency', 'interval', 'end_date')
+    list_display = ('frequency', 'interval', 'end_date', 'end_count', 'until')
     list_filter = ('frequency',)
 
 
@@ -49,3 +49,11 @@ class EventNotificationLogAdmin(admin.ModelAdmin):
 class EventCompletionAdmin(admin.ModelAdmin):
     list_display = ('event', 'occurrence_date', 'done_at')
     list_filter = ('occurrence_date', 'done_at')
+
+
+@admin.register(Feedback)
+class FeedbackAdmin(admin.ModelAdmin):
+    list_display = ('id', 'topic', 'user', 'platform', 'app_version', 'created_at', 'delivered_at')
+    list_filter = ('topic', 'platform')
+    search_fields = ('message', 'user__phone_number')
+    readonly_fields = ('created_at', 'delivered_at')

@@ -7,7 +7,8 @@ from tracker.serializers import (
     PhoneNumberSerializer, VerifyCodeSerializer, PetSerializer, 
     PetCreateSerializer, RefreshTokenSerializer, TokenResponseSerializer, 
     ErrorResponseSerializer, BreedSerializer, EventSerializer,
-    DeviceRegistrationSerializer, UserSerializer
+    DeviceRegistrationSerializer, UserSerializer, DeleteAccountSerializer,
+    FeedbackSerializer, NotificationSettingsSerializer
 )
 
 # --- Authentication ---
@@ -258,6 +259,7 @@ PET_VIEWSET_SCHEMAS = {
             - Учитываются повторяющиеся события: в ответе дата конкретного вхождения
             - Поле `done` считается для каждой даты отдельно
             - Чужой питомец возвращает 404
+            - Поле `time` — в UTC
             """,
         parameters=[
             OpenApiParameter(
@@ -334,9 +336,20 @@ BREED_LIST_SCHEMA = extend_schema(
 # --- Events ---
 
 EVENT_VIEWSET_SCHEMAS = {
+    'retrieve': extend_schema(
+        summary='Получить событие',
+        description='Поле `time` — в UTC.',
+    ),
+    'update': extend_schema(
+        summary='Обновить событие',
+        description='Полное обновление. Поле `time` — в UTC (сервер хранит локальное: `UTC + timezone_offset`).',
+    ),
+    'partial_update': extend_schema(
+        summary='Частично обновить событие',
+        description='Поле `time` — в UTC (сервер хранит локальное: `UTC + timezone_offset`).',
+    ),
     'create': extend_schema(
         summary='Создать событие',
-        description='Создает одноразовое или повторяющееся событие',
         request=EventSerializer,
         responses={201: EventSerializer},
         examples=[
@@ -358,8 +371,29 @@ EVENT_VIEWSET_SCHEMAS = {
                     }
                 },
                 request_only=True,
-            )
+            ),
+            OpenApiExample(
+                name='Recurring yearly with end after N repeats',
+                value={
+                    'pet': 1, 'type': 'custom', 'title': 'Прививка', 'start_date': '2026-10-05',
+                    'timezone_offset': 180, 'is_recurring': True,
+                    'recurrence': {
+                        'frequency': 'yearly', 'interval': 1,
+                        'year_dates': [{'month': 3, 'day': 15}],
+                        'end_type': 'count', 'end_count': 5,
+                    },
+                },
+                request_only=True,
+            ),
         ],
+        description=(
+            'Создает одноразовое или повторяющееся событие. Поле `time` — в UTC (сервер хранит локальное: `UTC + timezone_offset`).\n\n'
+            'Правило `recurrence`: `frequency` (daily/weekly/monthly/yearly), `interval` (дни 1–30, недели/месяцы 1–12, '
+            'годы 1–10), `week_days` (1–7), `month_days` (1–31 или -1 — последний день), `year_dates` '
+            '([{month, day}]), окончание: `end_date` либо `end_count` (2–999), `end_type` (never/date/count) '
+            'вычисляется. `times` (только daily, 1–6 значений «HH:MM» в UTC) — '
+            'несколько времён в день; `Event.time` становится первым слотом. Поля чужих периодов обнуляются. Ошибки окончания: коды `end_before_start`, `end_before_first`.'
+        ),
     ),
     'period': extend_schema(
         summary='Получить события за период',
@@ -367,6 +401,7 @@ EVENT_VIEWSET_SCHEMAS = {
             Возвращает словарь событий, сгруппированный по датам. 
             Ключ — дата в формате YYYY-MM-DD, значение — список событий в эту дату.
             Словарь отсортирован по датам, события внутри даты — по времени.
+            Ограничения: период не больше 400 дней, `date_from` ≤ `date_to`, не более 10 000 вхождений (иначе 400).
             """,
         parameters=[
             OpenApiParameter(name='date_from', type=OpenApiTypes.DATE, location=OpenApiParameter.QUERY, required=True),
@@ -403,6 +438,8 @@ EVENT_VIEWSET_SCHEMAS = {
                 - Для одноразового события передавайте его start_date
                 - Для повторяющегося — дату конкретного occurrence
                 - Повторный вызов безопасен (idempotent)
+                - Если у события несколько времён в день (`recurrence.times`), обязательно передайте `time`
+                  (в UTC, как `time` события); без него или с несуществующим слотом — 400
                 """,
         request=OpenApiTypes.OBJECT,
         responses={
@@ -421,6 +458,7 @@ EVENT_VIEWSET_SCHEMAS = {
         summary='Отменить выполнение события',
         description="""
                 Удаляет отметку о выполнении для конкретного occurrence события.
+                При нескольких временах в день нужен `time` слота (см. mark_done).
                 """,
         request=OpenApiTypes.OBJECT,
         responses={
@@ -441,30 +479,92 @@ EVENT_VIEWSET_SCHEMAS = {
 
 PROFILE_SCHEMA_GET = extend_schema(
     summary='Получить профиль пользователя',
-    description='Возвращает данные текущего авторизованного пользователя',
+    description='Возвращает данные текущего авторизованного пользователя: имя '
+                '(может быть пустым) и абсолютный URL фото (или null).',
     tags=['Профиль'],
-    responses={200: UserSerializer}
-)
-
-PROFILE_SCHEMA_PUT = extend_schema(
-    summary='Обновить профиль пользователя',
-    description='Полное обновление данных профиля',
-    tags=['Профиль'],
-    request=UserSerializer,
     responses={200: UserSerializer}
 )
 
 PROFILE_SCHEMA_PATCH = extend_schema(
-    summary='Частично обновить профиль пользователя',
-    description='Частичное обновление данных профиля',
+    summary='Обновить имя и фото профиля',
+    description='Принимает JSON или multipart. `name` — до 50 символов, пустая строка '
+                'очищает имя. `avatar` — JPG/PNG/HEIC до 10 МБ, сохраняется как JPEG '
+                '(до 1024 px). Номер телефона изменить нельзя — поле игнорируется.',
     tags=['Профиль'],
     request=UserSerializer,
     responses={200: UserSerializer}
 )
 
-PROFILE_SCHEMA_DELETE = extend_schema(
-    summary='Удалить профиль пользователя',
-    description='Удаляет аккаунт текущего пользователя',
+DELETE_ACCOUNT_SEND_CODE_SCHEMA = extend_schema(
+    summary='Удаление аккаунта: отправить код',
+    description='Шаг 1. Отправляет код подтверждения звонком на номер пользователя. '
+                'Код живёт 5 минут, повторно запросить можно через 60 секунд '
+                '(иначе 429).',
+    tags=['Профиль'],
+    request=None,
+    responses={
+        200: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description='Код отправлен',
+            examples=[OpenApiExample(
+                'Успех',
+                value={'detail': 'Код подтверждения отправлен', 'resend_timeout': 60},
+            )],
+        ),
+        429: OpenApiResponse(description='Код уже отправлен, повторите через минуту'),
+    },
+)
+
+DELETE_ACCOUNT_SCHEMA = extend_schema(
+    summary='Удаление аккаунта: подтвердить кодом',
+    description='Шаг 2. Проверяет код из звонка и безвозвратно удаляет аккаунт: '
+                'питомцев, события, устройства, фото; все refresh-токены отзываются. '
+                'Допускается 5 попыток на один код.',
+    tags=['Профиль'],
+    request=DeleteAccountSerializer,
+    responses={
+        204: None,
+        400: OpenApiResponse(description='Неверный код, код истёк или попытки исчерпаны'),
+    },
+)
+
+NOTIFICATION_SETTINGS_GET_SCHEMA = extend_schema(
+    summary='Настройки уведомлений',
+    description='Категории: walks (прогулки), feeding (кормление), medications '
+                '(лекарства, глистогонка, обработка от блох), vaccinations (прививки), '
+                'vet_visits (визиты к ветеринару). По умолчанию включено всё. '
+                'Остальные типы событий уведомляют всегда.',
+    tags=['Профиль'],
+    responses={200: NotificationSettingsSerializer},
+)
+
+NOTIFICATION_SETTINGS_PATCH_SCHEMA = extend_schema(
+    summary='Изменить настройки уведомлений',
+    description='Принимает любое подмножество ключей (например, `{"walks": false}`); '
+                'остальные категории не меняются. Возвращает полное состояние.',
+    tags=['Профиль'],
+    request=NotificationSettingsSerializer,
+    responses={200: NotificationSettingsSerializer},
+)
+
+FEEDBACK_SCHEMA = extend_schema(
+    summary='Отправить обращение',
+    description='Принимает multipart или JSON. `topic`: problem | idea | question; '
+                '`message` — 1–2000 символов; `screenshot` — изображение до 10 МБ '
+                '(необязательно). Данные устройства приложение передаёт '
+                'автоматически. Не более 5 обращений в час (иначе 429).',
+    tags=['Обратная связь'],
+    request=FeedbackSerializer,
+    responses={
+        201: FeedbackSerializer,
+        400: OpenApiResponse(description='Ошибка валидации'),
+        429: OpenApiResponse(description='Слишком много обращений'),
+    },
+)
+
+PROFILE_AVATAR_DELETE_SCHEMA = extend_schema(
+    summary='Удалить фото профиля',
+    description='Удаляет фото профиля. Если фото нет — всё равно 204 (идемпотентно).',
     tags=['Профиль'],
     responses={204: None}
 )

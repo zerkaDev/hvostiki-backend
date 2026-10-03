@@ -31,18 +31,24 @@ config/          settings.py, urls.py, celery.py, wsgi/asgi
 tracker/
   models.py      User (UUID pk, логин = phone_number), Breed, Pet,
                  RecurrenceRule, Event, EventCompletion,
-                 EventNotificationLog, FCMDevice
+                 EventNotificationLog, FCMDevice, NotificationSettings, Feedback
   serializers.py DRF-сериализаторы
   schemas.py     drf-spectacular схемы (документация эндпоинтов)
   views.py       APIView / ModelViewSet'ы
-  urls.py        маршруты (auth/*, profile/, breeds/, pets/, event_schedule/, devices/register/)
+  urls.py        маршруты (auth/*, profile/*, feedback/, breeds/, pets/, event_schedule/, devices/register/)
   tasks.py       Celery-задачи (send_confirmation_code, send_event_notifications,
                  flush_expired_tokens)
-  services/      firebase_service.py (FCM), ucalles_service.py (звонки-коды)
-  utils.py       generate_occurrences, shift_time_by_minutes, normalize_phone
+  services/      firebase_service.py (FCM), ucalles_service.py (звонки-коды),
+                 avatar.py (обработка фото профиля), account_deletion.py (код и удаление аккаунта),
+                 feedback_notifier.py (канал доставки обращений, заглушка LogNotifier)
+  notification_categories.py  категории уведомлений ↔ типы событий
+  recurrence.py  движок повторений (чистые функции): якорь, clamp, -1, yearly, until, normalize_rule
+  utils.py       generate_occurrences (тонкая обёртка над движком), shift_time_by_minutes, normalize_phone
+  event_time.py  время события: UTC на проводе ↔ локальное в БД (time_to_stored / time_to_wire)
   backends.py    PhoneBackend (вход в Django Admin по телефону)
-  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile
-  migrations/    0001..0016
+  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_profile_avatar/test_account_deletion/test_feedback/test_notification_settings/test_event_time/test_recurrence_* (vectors/api/slots)
+  tests/data/recurrence_vectors.json  общие векторы повторений (те же, что в мобильном приложении)
+  migrations/    0001..0023
 ```
 
 ## Соглашения проекта
@@ -50,8 +56,13 @@ tracker/
 1. **Схемы API обязательны.** Для каждого нового вью/экшена добавляй `@extend_schema` в `tracker/schemas.py`
    (теги и описания — на русском). Проверка: `python manage.py spectacular --file /tmp/schema.yml`.
 2. **Ошибки** возвращаются как `{'detail': '...'}`; тексты для пользователя — на русском.
-3. **Время.** `Event.time` в БД хранится в локальном времени пользователя (`UTC + timezone_offset`, смещение в
-   минутах). API принимает и отдаёт время в UTC. Пересчёт — только через `shift_time_by_minutes`.
+3. **Время.** **Инвариант: `Event.time` и слоты `RecurrenceRule.times` в БД всегда хранятся в локальном
+   времени события (`UTC + timezone_offset`, смещение в минутах).** API принимает и отдаёт время **в UTC**
+   (`time`, `recurrence.times`, `time` в `mark_done`/`mark_undone`); дата вхождения (`start_date`) — локальная.
+   Пересчёт — только через `time_to_stored` / `time_to_wire` (`tracker/event_time.py`, поверх
+   `shift_time_by_minutes`), не вручную. Порядок событий внутри дня — по моменту события (локальное время
+   минус offset), а не по строке `time` из ответа. Новый эндпоинт, отдающий или принимающий время события,
+   обязан конвертировать так же и иметь тесты (см. `tests/test_event_time.py`).
 4. **Права.** По умолчанию `IsAuthenticated` (см. `REST_FRAMEWORK` в `config/settings.py`); публичные вьюхи
    (`SendCodeView`, `VerifyCodeView`, `RefreshTokenView`) явно ставят `permissions.AllowAny`.
 5. **JWT.** Ротация refresh-токенов отключена (`ROTATE_REFRESH_TOKENS=False`), поэтому `/auth/token/refresh/`
@@ -63,9 +74,29 @@ tracker/
 6. **Только отправленный код подтверждения.** В проде `DEBUG_CONFIRMATION_CODE` не задаётся, поэтому
    фиксированного кода `1234` нет; в dev он включается переменной окружения (см. README).
 7. **Чтение связанных объектов.** Сериализаторы добавляют «развёрнутые» поля (`pet_obj`, `breed_obj`), это часть
-   контракта с мобильным клиентом — не удалять.
+   контракта с мобильным клиентом — не удалять. Исключение: в списках `/event_schedule/period/` и
+   `/pets/{id}/upcoming/` у событий `pet_obj` нет (клиент берёт питомца по `pet` из своего списка).
 8. **Секреты.** `.env` и `firebase-key.json` в `.gitignore` — никогда не коммитить. Push не работает, если
    `firebase-key.json` отсутствует в корне проекта.
+
+## Раздел «Профиль» (контракт)
+
+- `GET /profile/` → `id, phone_number, name, avatar (абсолютный URL | null), notification_settings, is_verified, created_at`.
+- `PATCH /profile/` (JSON или multipart): `name` (≤50, пустая строка очищает), `avatar` (JPG/PNG/HEIC ≤10 МБ → JPEG ≤1024 px).
+  **Номер телефона изменить нельзя** (поле игнорируется), PUT и DELETE на `/profile/` не поддерживаются.
+- `DELETE /profile/avatar/` — 204, идемпотентно.
+- `GET/PATCH /profile/notification-settings/` — карта `walks|feeding|medications|vaccinations|vet_visits → bool`;
+  хранятся только отключённые категории (`NotificationSettings.disabled_categories`), по умолчанию включено всё.
+  Соответствие типам событий — `tracker/notification_categories.py`; типы вне соответствия (grooming, bathing,
+  nailTrimming, custom) уведомляют всегда. Фильтр — в `_notify_slot` **до** занятия `EventNotificationLog`.
+- Удаление аккаунта: `POST /profile/delete/send-code/` (звонок, 429 чаще раза в минуту) → `POST /profile/delete/` `{code}` → 204.
+  Код хранится в кэше (5 мин, 5 попыток), отдельно от кода входа, в логи не пишется. Удаление атомарно:
+  refresh-токены в blacklist, каскадное удаление, файлы (аватар, фото питомцев) удаляются через storage `on_commit`.
+- `POST /feedback/` — `topic` problem|idea|question, `message` 1–2000, `screenshot` ≤10 МБ, данные устройства; лимит 5/час
+  (`FEEDBACK_THROTTLE_RATE`). Доставка — Celery `deliver_feedback` через `FEEDBACK_NOTIFIER` (по умолчанию
+  `LogNotifier`-заглушка; для Telegram-бота — новый класс с `send(feedback)` и смена настройки).
+- Медиа: `MEDIA_ROOT`/`MEDIA_STORAGE_BACKEND` из env, в prod — том `media`; `/media/` отдаёт Django при DEBUG или `SERVE_MEDIA=1`.
+  Файлы удалять только через storage API (`field.storage.delete`), не через `os`.
 
 ## Тесты и проверки
 
@@ -93,9 +124,19 @@ docker compose -f docker-compose.dev.yml run --rm web python manage.py spectacul
 
 - **`Event.done` — legacy**: фактический статус выполнения хранится в `EventCompletion`, поле `done` в API
   вычисляется (`SerializerMethodField`). Поле в БД осталось для совместимости.
-- **`send_event_notifications`** обходит все события каждую минуту (SQL-фильтра по дате нет) — на больших
-  объёмах стоит добавить предварительную выборку. Окно срабатывания — `NOTIFICATION_LOOKBACK` (2 минуты),
-  повторные отправки отсекает `EventNotificationLog`.
+- **`send_event_notifications`** каждую минуту выбирает события с SQL-предфильтром по дате старта и
+  `RecurrenceRule.until`; сбой одного события логируется и не останавливает остальных. Запись
+  `EventNotificationLog` «занимается» до отправки (уникальный индекс), при ошибке отправки снимается.
+  Окно срабатывания — `NOTIFICATION_LOOKBACK` (2 минуты).
+- **Повторения.** Семантика — в docstring `tracker/recurrence.py`; любое её изменение сначала вносится в
+  `tests/data/recurrence_vectors.json` (общий с приложением). `RecurrenceRule.until` — кэш последней даты:
+  пересчитывается в сериализаторе при создании/правке правила и смене `start_date`. `/period/`: окно ≤ 400 дней,
+  ≤ 10 000 вхождений (считаются слоты), иначе 400; включён `GZipMiddleware`.
+- **Несколько времён в день.** `RecurrenceRule.times` (только daily, ≥2 значений, локальное время, `HH:MM`);
+  при одном слоте поле пустое, время в `Event.time`; `Event.time` = первый слот. В `/period/` — запись на слот
+  (`time` слота, `done` по слоту). `EventCompletion`/`EventNotificationLog.occurrence_time` (NULL — «как раньше»,
+  в многослотовом режиме NULL-отметка относится к первому слоту); `mark_done`/`mark_undone` при >1 слоте требуют
+  `time`. Уведомления — по каждому слоту, в данных пуша `time`.
 - **`token_blacklist`** растёт: чистка висит на задаче `flush_expired_tokens` в beat, а `celery-beat`
   обязателен и в проде (`docker-compose.prod.yml`).
 - **Уведомления** рассылаются только тем устройствам, что зарегистрированы через `POST /devices/register/`;
@@ -111,3 +152,11 @@ docker compose -f docker-compose.dev.yml run --rm web python manage.py spectacul
   остальных пакетов при этом не поднимаются).
 - Не коммитить `.env`, `firebase-key.json`, `celerybeat-schedule`, `media/`.
 - Перед завершением задачи: `pytest` + `manage.py check` + `makemigrations --check --dry-run`.
+
+## Выкатка миграции времени (0018)
+
+Миграция `0018_event_time_to_local` меняет данные (`Event.time = time − timezone_offset`: раньше приложение
+присылало локальное время как UTC, и в БД оно лежало сдвинутым). Её нужно применить **одним окном** с деплоем
+кода: остановить `web`, `celery` и `celery-beat`, развернуть образ, `python manage.py migrate`, запустить
+сервисы. Проверка: событие `time=14:05`, `timezone_offset=180` лежит в БД как 17:05, отдаётся как 14:05, пуш
+уходит в 17:05 МСК. Откат: прежний образ и `python manage.py migrate tracker 0017`.

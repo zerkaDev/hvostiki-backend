@@ -64,10 +64,19 @@ phone_validator = RegexValidator(
 )
 
 
+def user_avatar_path(instance, filename):
+    """Путь аватара: ``avatars/<user_uuid>/<uuid>.jpg`` (без персональных данных в имени)."""
+    return f'avatars/{instance.pk}/{uuid.uuid4().hex}.jpg'
+
+
 class User(AbstractBaseUser, PermissionsMixin):
     """Основная модель пользователя со всеми данными"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     phone_number = models.CharField(max_length=20, unique=True, validators=[phone_validator])
+
+    # Профиль
+    name = models.CharField('Имя', max_length=50, blank=True, default='')
+    avatar = models.ImageField('Фото профиля', upload_to=user_avatar_path, null=True, blank=True)
 
     # Статусы
     is_active = models.BooleanField(default=True)
@@ -133,6 +142,7 @@ class EventTypeChoices(models.TextChoices):
     FEEDING = 'feeding', 'Feeding'
     NAIL_TRIMMING = 'nailTrimming', 'Nail trimming'
     FLEA_TREATMENT = 'fleaTreatment', 'Flea treatment'
+    VET_VISIT = 'vetVisit', 'Vet visit'
     CUSTOM = 'custom', 'Custom'
 
 
@@ -222,9 +232,16 @@ class RecurrenceFrequency(models.TextChoices):
     DAILY = 'daily', 'Daily'
     WEEKLY = 'weekly', 'Weekly'
     MONTHLY = 'monthly', 'Monthly'
+    YEARLY = 'yearly', 'Yearly'
 
 
 class RecurrenceRule(models.Model):
+    """Правило повторения события (семантика вхождений — в :mod:`tracker.recurrence`).
+
+    Заполняются только поля выбранного периода; остальные ``NULL`` (сериализатор их обнуляет).
+    Окончание — ``end_date`` либо ``end_count`` (не оба); ``until`` — вычисляемая последняя дата
+    (для ``end_count`` — дата N-го вхождения-дня), нужна SQL-предфильтрам выдачи и рассылки.
+    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     frequency = models.CharField(
@@ -234,16 +251,30 @@ class RecurrenceRule(models.Model):
     interval = models.PositiveIntegerField(default=1)
 
     week_days = models.JSONField(blank=True, null=True)   # [1,4]
-    month_days = models.JSONField(blank=True, null=True)  # [5,20]
+    month_days = models.JSONField(blank=True, null=True)  # [5,20], -1 = последний день месяца
+    year_dates = models.JSONField(blank=True, null=True)  # [{"month": 3, "day": 15}]
+    # Несколько времён в день (только daily, ≥2 значений): ["08:00", "14:00"], локальное время события.
+    # При одном времени поле пустое, время хранится в Event.time.
+    times = models.JSONField(blank=True, null=True)
 
+    # Окончание: «до даты» (end_date) либо «после N повторений» (end_count); не оба сразу.
     end_date = models.DateField(blank=True, null=True)
+    end_count = models.PositiveIntegerField(blank=True, null=True)
+    # Эффективная последняя дата: end_date либо дата N-го вхождения-дня. Кэш для SQL-предфильтра
+    # (рассылки) — пересчитывается при каждом сохранении правила/даты старта события.
+    until = models.DateField(blank=True, null=True, db_index=True)
 
     def clean(self):
-        if self.frequency == RecurrenceFrequency.WEEKLY and not self.week_days:
-            raise ValidationError('week_days required for weekly recurrence')
-
-        if self.frequency == RecurrenceFrequency.MONTHLY and not self.month_days:
-            raise ValidationError('month_days required for monthly recurrence')
+        """Проверка инвариантов правила (админка/shell обходят DRF-сериализатор)."""
+        from tracker.recurrence import RuleError, normalize_rule
+        try:
+            normalize_rule({
+                'frequency': self.frequency, 'interval': self.interval,
+                'week_days': self.week_days, 'month_days': self.month_days,
+                'year_dates': self.year_dates, 'end_date': self.end_date, 'end_count': self.end_count,
+            })
+        except RuleError as exc:
+            raise ValidationError(exc.message)
 
     def __str__(self):
         return f'{self.frequency}'
@@ -304,6 +335,7 @@ class Event(models.Model):
 
 
 class EventNotificationLog(models.Model):
+    """Журнал отправленных уведомлений: защита от дублей по ``(событие, дата, слот, тип)``."""
     event = models.ForeignKey('Event', on_delete=models.CASCADE)
     occurrence_date = models.DateField()
     notification_type = models.CharField(
@@ -311,19 +343,40 @@ class EventNotificationLog(models.Model):
         choices=EventNotificationType.choices,
         default=EventNotificationType.STANDARD
     )
+    # Слот времени при нескольких временах в день; NULL — обычное событие (одно время / весь день)
+    occurrence_time = models.TimeField(null=True, blank=True)
     sent_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('event', 'occurrence_date', 'notification_type')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['event', 'occurrence_date', 'occurrence_time', 'notification_type'],
+                nulls_distinct=False,
+                name='uniq_notification_slot',
+            ),
+        ]
 
 
 class EventCompletion(models.Model):
+    """Отметка «выполнено» на конкретное вхождение: дата и, при нескольких временах в день, слот.
+
+    ``occurrence_time = NULL`` — одно время / весь день (как раньше); в многослотовом режиме такая
+    отметка относится к первому слоту.
+    """
     event = models.ForeignKey('Event', on_delete=models.CASCADE)
     occurrence_date = models.DateField()
+    # Слот времени при нескольких временах в день; NULL — одно время / весь день (как раньше)
+    occurrence_time = models.TimeField(null=True, blank=True)
     done_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('event', 'occurrence_date')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['event', 'occurrence_date', 'occurrence_time'],
+                nulls_distinct=False,
+                name='uniq_completion_slot',
+            ),
+        ]
 
 
 class FCMDevice(models.Model):
@@ -335,3 +388,59 @@ class FCMDevice(models.Model):
     class Meta:
         verbose_name = 'FCM устройство'
         verbose_name_plural = 'FCM устройства'
+
+
+class NotificationSettings(models.Model):
+    """Настройки уведомлений пользователя. Хранятся только отключённые категории:
+    по умолчанию (и пока записи нет) включено всё, новые категории включаются сами."""
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name='notification_settings'
+    )
+    disabled_categories = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Настройки уведомлений'
+        verbose_name_plural = 'Настройки уведомлений'
+
+    def __str__(self):
+        return f'Настройки уведомлений {self.user_id}'
+
+
+def feedback_screenshot_path(instance, filename):
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'jpg'
+    return f'feedback/{timezone.now():%Y/%m/%d}/{uuid.uuid4().hex}.{ext}'
+
+
+class FeedbackTopic(models.TextChoices):
+    PROBLEM = 'problem', 'Проблема'
+    IDEA = 'idea', 'Идея'
+    QUESTION = 'question', 'Вопрос'
+
+
+class Feedback(models.Model):
+    """Обращение пользователя из раздела «Помощь и обратная связь»."""
+    user = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='feedbacks'
+    )
+    topic = models.CharField(max_length=20, choices=FeedbackTopic.choices)
+    message = models.TextField()
+    screenshot = models.ImageField(upload_to=feedback_screenshot_path, null=True, blank=True)
+
+    # Техническая информация, добавляется приложением автоматически
+    app_version = models.CharField(max_length=32, blank=True)
+    build_number = models.CharField(max_length=32, blank=True)
+    platform = models.CharField(max_length=20, blank=True)
+    os_version = models.CharField(max_length=64, blank=True)
+    device_model = models.CharField(max_length=100, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = 'Обращение'
+        verbose_name_plural = 'Обращения'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.get_topic_display()} от {self.created_at:%d.%m.%Y %H:%M}'

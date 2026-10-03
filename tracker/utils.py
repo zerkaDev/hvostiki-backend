@@ -23,45 +23,16 @@ def normalize_phone(phone: str) -> str:
 
 
 def generate_occurrences(event, date_from, date_to):
-    occurrences = []
+    """Даты вхождений события в окне [date_from, date_to] (семантика — в tracker/recurrence.py)."""
+    if not event.is_recurring or event.recurrence is None:
+        return [event.start_date] if date_from <= event.start_date <= date_to else []
 
-    current = max(event.start_date, date_from)
-
-    if not event.is_recurring:
-        if date_from <= event.start_date <= date_to:
-            occurrences.append(event.start_date)
-        return occurrences
+    from tracker.recurrence import Rule, occurrences
 
     rule = event.recurrence
-    # interval = «каждые N дней/недель/месяцев»; 0 недопустим (защита от деления на 0)
-    interval = max(1, rule.interval or 1)
-
-    # Точка отсчёта для недель/месяцев — неделя/месяц старта события
-    start_week = event.start_date - timedelta(days=event.start_date.isoweekday() - 1)
-
-    while current <= date_to:
-        if rule.end_date and current > rule.end_date:
-            break
-
-        if rule.frequency == 'daily':
-            if (current - event.start_date).days % interval == 0:
-                occurrences.append(current)
-
-        elif rule.frequency == 'weekly':
-            weeks_passed = (current - start_week).days // 7
-            if weeks_passed % interval == 0 and current.isoweekday() in (rule.week_days or []):
-                occurrences.append(current)
-
-        elif rule.frequency == 'monthly':
-            months_passed = (current.year - event.start_date.year) * 12 + (
-                current.month - event.start_date.month
-            )
-            if months_passed % interval == 0 and current.day in (rule.month_days or []):
-                occurrences.append(current)
-
-        current += timedelta(days=1)
-
-    return occurrences
+    # until — кэш; для старых строк без него берём end_date
+    until = rule.until or rule.end_date
+    return occurrences(Rule.from_model(rule), event.start_date, max(date_from, event.start_date), date_to, until)
 
 
 def shift_time_by_minutes(value: time_type, delta_minutes: int) -> time_type:

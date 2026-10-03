@@ -205,3 +205,59 @@ def test_beat_schedule_references_registered_tasks():
         if entry['task'] not in registered
     ]
     assert not missing, f'Незарегистрированные задачи в CELERY_BEAT_SCHEDULE: {missing}'
+
+
+@pytest.mark.django_db
+class TestNotificationReliability:
+    def _event(self, user, pet, title, **extra):
+        rule = RecurrenceRule.objects.create(frequency=RecurrenceFrequency.DAILY, **extra.pop('rule', {}))
+        return Event.objects.create(
+            user=user, pet=pet, title=title, start_date=date.today(), time=None,
+            is_recurring=True, recurrence=rule, timezone_offset=0,
+        )
+
+    def _run(self):
+        mock_now = datetime.combine(date.today(), time(8, 0))
+        with patch('django.utils.timezone.now', return_value=timezone.make_aware(mock_now)):
+            send_event_notifications()
+
+    def test_failure_of_one_event_does_not_stop_others(self, user, pet):
+        from tracker.models import FCMDevice
+        FCMDevice.objects.create(user=user, fcm_token='t')
+        first = self._event(user, pet, 'A')
+        second = self._event(user, pet, 'B')
+        calls = []
+
+        def fake_send(**kwargs):
+            calls.append(kwargs['title'])
+            if kwargs['title'].endswith('A'):
+                raise RuntimeError('boom')
+
+        with patch('tracker.tasks.firebase_service.send_push_notification', side_effect=fake_send):
+            self._run()
+
+        assert len(calls) == 2
+        # неудавшееся уведомление не «занято» — будет повторено; удавшееся записано
+        assert not EventNotificationLog.objects.filter(event=first).exists()
+        assert EventNotificationLog.objects.filter(event=second).exists()
+
+    def test_already_claimed_log_prevents_duplicate_push(self, user, pet):
+        from tracker.models import FCMDevice
+        FCMDevice.objects.create(user=user, fcm_token='t')
+        event = self._event(user, pet, 'A')
+        EventNotificationLog.objects.create(
+            event=event, occurrence_date=date.today(), notification_type=EventNotificationType.FINAL,
+        )
+        with patch('tracker.tasks.firebase_service.send_push_notification') as send:
+            self._run()
+        send.assert_not_called()
+
+    def test_finished_rule_is_not_notified(self, user, pet):
+        from tracker.models import FCMDevice
+        FCMDevice.objects.create(user=user, fcm_token='t')
+        ended = self._event(user, pet, 'old', rule={'end_date': date.today() - timedelta(days=10),
+                                                    'until': date.today() - timedelta(days=10)})
+        with patch('tracker.tasks.firebase_service.send_push_notification') as send:
+            self._run()
+        send.assert_not_called()
+        assert not EventNotificationLog.objects.filter(event=ended).exists()
