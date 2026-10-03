@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Q
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
@@ -8,9 +9,13 @@ from tracker.recurrence import (
     END_TYPES, RuleError, check_end_against_start, derive_end_type, normalize_rule, normalize_times,
     parse_stored_times, recompute_until, rule_from_normalized,
 )
-from tracker.models import User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
+from tracker.models import Feedback, NotificationSettings, User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
 
 from .event_time import time_to_stored, time_to_wire
+from .notification_categories import CATEGORIES
+from .services.avatar import process_avatar
+
+MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024
 from .utils import normalize_phone
 
 
@@ -80,18 +85,79 @@ class VerifyCodeSerializer(serializers.Serializer):
         return data
 
 
+class DeleteAccountSerializer(serializers.Serializer):
+    """Подтверждение удаления аккаунта кодом из звонка"""
+    code = serializers.CharField(max_length=6)
+
+
+def notification_settings_for(user):
+    """Карта ``категория -> включена`` (без записи в БД — всё включено)."""
+    settings_row = NotificationSettings.objects.filter(user=user).first()
+    disabled = set(settings_row.disabled_categories) if settings_row else set()
+    return {category: category not in disabled for category in CATEGORIES}
+
+
+class NotificationSettingsSerializer(serializers.Serializer):
+    """Включённость категорий уведомлений. PATCH принимает любое подмножество ключей."""
+    walks = serializers.BooleanField(required=False)
+    feeding = serializers.BooleanField(required=False)
+    medications = serializers.BooleanField(required=False)
+    vaccinations = serializers.BooleanField(required=False)
+    vet_visits = serializers.BooleanField(required=False)
+
+    def to_representation(self, instance):
+        return notification_settings_for(instance)
+
+    def update(self, user, validated_data):
+        row, _ = NotificationSettings.objects.get_or_create(user=user)
+        disabled = set(row.disabled_categories)
+        for category, enabled in validated_data.items():
+            if enabled:
+                disabled.discard(category)
+            else:
+                disabled.add(category)
+        row.disabled_categories = [c for c in CATEGORIES if c in disabled]
+        row.save(update_fields=['disabled_categories', 'updated_at'])
+        return user
+
+
 class UserSerializer(serializers.ModelSerializer):
-    """Сериализатор для отображения и редактирования данных пользователя"""
+    """Профиль пользователя. Номер телефона только для чтения — его нельзя сменить."""
+
+    name = serializers.CharField(
+        max_length=50, required=False, allow_blank=True, trim_whitespace=True
+    )
+    avatar = serializers.ImageField(required=False, allow_null=False)
+    notification_settings = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             'id',
             'phone_number',
+            'name',
+            'avatar',
+            'notification_settings',
             'is_verified',
             'created_at',
         ]
-        read_only_fields = ['id', 'is_verified', 'created_at']
+        read_only_fields = ['id', 'phone_number', 'is_verified', 'created_at']
+
+    @extend_schema_field(NotificationSettingsSerializer)
+    def get_notification_settings(self, user):
+        return notification_settings_for(user)
+
+    def validate_avatar(self, value):
+        return process_avatar(value)
+
+    def update(self, instance, validated_data):
+        old_avatar = instance.avatar.name if instance.avatar else None
+        instance = super().update(instance, validated_data)
+        new_avatar = instance.avatar.name if instance.avatar else None
+        if old_avatar and old_avatar != new_avatar:
+            storage = instance.avatar.storage
+            transaction.on_commit(lambda: storage.delete(old_avatar))
+        return instance
 
 
 class BreedSerializer(serializers.ModelSerializer):
@@ -441,3 +507,29 @@ class EventCompletionSerializer(serializers.ModelSerializer):
         model = EventCompletion
         fields = ('event', 'occurrence_date', 'done_at')
         read_only_fields = ('done_at',)
+
+
+class FeedbackSerializer(serializers.ModelSerializer):
+    """Обращение из «Помощь и обратная связь» (скриншот необязателен, до 10 МБ)"""
+    message = serializers.CharField(max_length=2000, trim_whitespace=True)
+    screenshot = serializers.ImageField(required=False, allow_null=True)
+
+    class Meta:
+        model = Feedback
+        fields = [
+            'id', 'topic', 'message', 'screenshot',
+            'app_version', 'build_number', 'platform', 'os_version', 'device_model',
+        ]
+        read_only_fields = ['id']
+        extra_kwargs = {
+            'app_version': {'required': False},
+            'build_number': {'required': False},
+            'platform': {'required': False},
+            'os_version': {'required': False},
+            'device_model': {'required': False},
+        }
+
+    def validate_screenshot(self, value):
+        if value is not None and value.size > MAX_SCREENSHOT_BYTES:
+            raise serializers.ValidationError('Файл слишком большой. Максимум — 10 МБ.')
+        return value

@@ -6,11 +6,12 @@ from datetime import datetime, time, timedelta
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 
-from tracker.models import Event, EventNotificationLog, EventCompletion, EventNotificationType, RecurrenceFrequency, FCMDevice
+from tracker.models import Event, EventNotificationLog, EventCompletion, EventNotificationType, RecurrenceFrequency, FCMDevice, NotificationSettings
 
 from tracker.services.ucalles_service import UCallerService
 from tracker.services.firebase_service import firebase_service
 from tracker.recurrence import event_slots
+from tracker.notification_categories import category_for_event_type
 from tracker.utils import generate_occurrences
 
 # Beat и воркер могут сработать с задержкой, поэтому уведомление считается
@@ -29,6 +30,25 @@ def _is_due(target: datetime, now_local: datetime) -> bool:
 @shared_task
 def send_confirmation_code(phone_number, confirmation_code):
     UCallerService().send_call_code(phone_number, confirmation_code)
+    return 'Done'
+
+
+@shared_task(bind=True, max_retries=5, default_retry_delay=60)
+def deliver_feedback(self, feedback_id):
+    """Доставляет обращение через настроенный FeedbackNotifier (с повторами при сбое)."""
+    from tracker.models import Feedback
+    from tracker.services.feedback_notifier import get_notifier
+
+    feedback = Feedback.objects.filter(pk=feedback_id).first()
+    if feedback is None or feedback.delivered_at:
+        return 'Skipped'
+    try:
+        get_notifier().send(feedback)
+    except Exception as exc:
+        logger.warning('Не удалось доставить обращение #%s', feedback_id, exc_info=True)
+        raise self.retry(exc=exc)
+    feedback.delivered_at = timezone.now()
+    feedback.save(update_fields=['delivered_at'])
     return 'Done'
 
 
@@ -147,6 +167,15 @@ def _notify_slot(event, slot_time, multi_slot, now_utc):
         done = done.filter(slot_filter)
     if done.exists():
         return
+
+    # Пользователь отключил эту категорию — не отправляем и не занимаем запись лога
+    category = category_for_event_type(event.type)
+    if category:
+        disabled = NotificationSettings.objects.filter(user_id=event.user_id).values_list(
+            'disabled_categories', flat=True
+        ).first()
+        if disabled and category in disabled:
+            return
 
     # «Занимаем» запись лога ДО отправки: уникальный индекс не даёт двум воркерам/запускам
     # отправить одно и то же уведомление дважды. Если отправка упадёт — запись снимаем.

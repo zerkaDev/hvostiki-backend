@@ -64,10 +64,19 @@ phone_validator = RegexValidator(
 )
 
 
+def user_avatar_path(instance, filename):
+    """Путь аватара: ``avatars/<user_uuid>/<uuid>.jpg`` (без персональных данных в имени)."""
+    return f'avatars/{instance.pk}/{uuid.uuid4().hex}.jpg'
+
+
 class User(AbstractBaseUser, PermissionsMixin):
     """Основная модель пользователя со всеми данными"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     phone_number = models.CharField(max_length=20, unique=True, validators=[phone_validator])
+
+    # Профиль
+    name = models.CharField('Имя', max_length=50, blank=True, default='')
+    avatar = models.ImageField('Фото профиля', upload_to=user_avatar_path, null=True, blank=True)
 
     # Статусы
     is_active = models.BooleanField(default=True)
@@ -133,6 +142,7 @@ class EventTypeChoices(models.TextChoices):
     FEEDING = 'feeding', 'Feeding'
     NAIL_TRIMMING = 'nailTrimming', 'Nail trimming'
     FLEA_TREATMENT = 'fleaTreatment', 'Flea treatment'
+    VET_VISIT = 'vetVisit', 'Vet visit'
     CUSTOM = 'custom', 'Custom'
 
 
@@ -378,3 +388,59 @@ class FCMDevice(models.Model):
     class Meta:
         verbose_name = 'FCM устройство'
         verbose_name_plural = 'FCM устройства'
+
+
+class NotificationSettings(models.Model):
+    """Настройки уведомлений пользователя. Хранятся только отключённые категории:
+    по умолчанию (и пока записи нет) включено всё, новые категории включаются сами."""
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name='notification_settings'
+    )
+    disabled_categories = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Настройки уведомлений'
+        verbose_name_plural = 'Настройки уведомлений'
+
+    def __str__(self):
+        return f'Настройки уведомлений {self.user_id}'
+
+
+def feedback_screenshot_path(instance, filename):
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'jpg'
+    return f'feedback/{timezone.now():%Y/%m/%d}/{uuid.uuid4().hex}.{ext}'
+
+
+class FeedbackTopic(models.TextChoices):
+    PROBLEM = 'problem', 'Проблема'
+    IDEA = 'idea', 'Идея'
+    QUESTION = 'question', 'Вопрос'
+
+
+class Feedback(models.Model):
+    """Обращение пользователя из раздела «Помощь и обратная связь»."""
+    user = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='feedbacks'
+    )
+    topic = models.CharField(max_length=20, choices=FeedbackTopic.choices)
+    message = models.TextField()
+    screenshot = models.ImageField(upload_to=feedback_screenshot_path, null=True, blank=True)
+
+    # Техническая информация, добавляется приложением автоматически
+    app_version = models.CharField(max_length=32, blank=True)
+    build_number = models.CharField(max_length=32, blank=True)
+    platform = models.CharField(max_length=20, blank=True)
+    os_version = models.CharField(max_length=64, blank=True)
+    device_model = models.CharField(max_length=100, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = 'Обращение'
+        verbose_name_plural = 'Обращения'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.get_topic_display()} от {self.created_at:%d.%m.%Y %H:%M}'

@@ -7,7 +7,8 @@ from tracker.serializers import (
     PhoneNumberSerializer, VerifyCodeSerializer, PetSerializer, 
     PetCreateSerializer, RefreshTokenSerializer, TokenResponseSerializer, 
     ErrorResponseSerializer, BreedSerializer, EventSerializer,
-    DeviceRegistrationSerializer, UserSerializer
+    DeviceRegistrationSerializer, UserSerializer, DeleteAccountSerializer,
+    FeedbackSerializer, NotificationSettingsSerializer
 )
 
 # --- Authentication ---
@@ -478,30 +479,92 @@ EVENT_VIEWSET_SCHEMAS = {
 
 PROFILE_SCHEMA_GET = extend_schema(
     summary='Получить профиль пользователя',
-    description='Возвращает данные текущего авторизованного пользователя',
+    description='Возвращает данные текущего авторизованного пользователя: имя '
+                '(может быть пустым) и абсолютный URL фото (или null).',
     tags=['Профиль'],
-    responses={200: UserSerializer}
-)
-
-PROFILE_SCHEMA_PUT = extend_schema(
-    summary='Обновить профиль пользователя',
-    description='Полное обновление данных профиля',
-    tags=['Профиль'],
-    request=UserSerializer,
     responses={200: UserSerializer}
 )
 
 PROFILE_SCHEMA_PATCH = extend_schema(
-    summary='Частично обновить профиль пользователя',
-    description='Частичное обновление данных профиля',
+    summary='Обновить имя и фото профиля',
+    description='Принимает JSON или multipart. `name` — до 50 символов, пустая строка '
+                'очищает имя. `avatar` — JPG/PNG/HEIC до 10 МБ, сохраняется как JPEG '
+                '(до 1024 px). Номер телефона изменить нельзя — поле игнорируется.',
     tags=['Профиль'],
     request=UserSerializer,
     responses={200: UserSerializer}
 )
 
-PROFILE_SCHEMA_DELETE = extend_schema(
-    summary='Удалить профиль пользователя',
-    description='Удаляет аккаунт текущего пользователя',
+DELETE_ACCOUNT_SEND_CODE_SCHEMA = extend_schema(
+    summary='Удаление аккаунта: отправить код',
+    description='Шаг 1. Отправляет код подтверждения звонком на номер пользователя. '
+                'Код живёт 5 минут, повторно запросить можно через 60 секунд '
+                '(иначе 429).',
+    tags=['Профиль'],
+    request=None,
+    responses={
+        200: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description='Код отправлен',
+            examples=[OpenApiExample(
+                'Успех',
+                value={'detail': 'Код подтверждения отправлен', 'resend_timeout': 60},
+            )],
+        ),
+        429: OpenApiResponse(description='Код уже отправлен, повторите через минуту'),
+    },
+)
+
+DELETE_ACCOUNT_SCHEMA = extend_schema(
+    summary='Удаление аккаунта: подтвердить кодом',
+    description='Шаг 2. Проверяет код из звонка и безвозвратно удаляет аккаунт: '
+                'питомцев, события, устройства, фото; все refresh-токены отзываются. '
+                'Допускается 5 попыток на один код.',
+    tags=['Профиль'],
+    request=DeleteAccountSerializer,
+    responses={
+        204: None,
+        400: OpenApiResponse(description='Неверный код, код истёк или попытки исчерпаны'),
+    },
+)
+
+NOTIFICATION_SETTINGS_GET_SCHEMA = extend_schema(
+    summary='Настройки уведомлений',
+    description='Категории: walks (прогулки), feeding (кормление), medications '
+                '(лекарства, глистогонка, обработка от блох), vaccinations (прививки), '
+                'vet_visits (визиты к ветеринару). По умолчанию включено всё. '
+                'Остальные типы событий уведомляют всегда.',
+    tags=['Профиль'],
+    responses={200: NotificationSettingsSerializer},
+)
+
+NOTIFICATION_SETTINGS_PATCH_SCHEMA = extend_schema(
+    summary='Изменить настройки уведомлений',
+    description='Принимает любое подмножество ключей (например, `{"walks": false}`); '
+                'остальные категории не меняются. Возвращает полное состояние.',
+    tags=['Профиль'],
+    request=NotificationSettingsSerializer,
+    responses={200: NotificationSettingsSerializer},
+)
+
+FEEDBACK_SCHEMA = extend_schema(
+    summary='Отправить обращение',
+    description='Принимает multipart или JSON. `topic`: problem | idea | question; '
+                '`message` — 1–2000 символов; `screenshot` — изображение до 10 МБ '
+                '(необязательно). Данные устройства приложение передаёт '
+                'автоматически. Не более 5 обращений в час (иначе 429).',
+    tags=['Обратная связь'],
+    request=FeedbackSerializer,
+    responses={
+        201: FeedbackSerializer,
+        400: OpenApiResponse(description='Ошибка валидации'),
+        429: OpenApiResponse(description='Слишком много обращений'),
+    },
+)
+
+PROFILE_AVATAR_DELETE_SCHEMA = extend_schema(
+    summary='Удалить фото профиля',
+    description='Удаляет фото профиля. Если фото нет — всё равно 204 (идемпотентно).',
     tags=['Профиль'],
     responses={204: None}
 )

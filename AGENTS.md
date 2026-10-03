@@ -31,21 +31,24 @@ config/          settings.py, urls.py, celery.py, wsgi/asgi
 tracker/
   models.py      User (UUID pk, логин = phone_number), Breed, Pet,
                  RecurrenceRule, Event, EventCompletion,
-                 EventNotificationLog, FCMDevice
+                 EventNotificationLog, FCMDevice, NotificationSettings, Feedback
   serializers.py DRF-сериализаторы
   schemas.py     drf-spectacular схемы (документация эндпоинтов)
   views.py       APIView / ModelViewSet'ы
-  urls.py        маршруты (auth/*, profile/, breeds/, pets/, event_schedule/, devices/register/)
+  urls.py        маршруты (auth/*, profile/*, feedback/, breeds/, pets/, event_schedule/, devices/register/)
   tasks.py       Celery-задачи (send_confirmation_code, send_event_notifications,
                  flush_expired_tokens)
-  services/      firebase_service.py (FCM), ucalles_service.py (звонки-коды)
+  services/      firebase_service.py (FCM), ucalles_service.py (звонки-коды),
+                 avatar.py (обработка фото профиля), account_deletion.py (код и удаление аккаунта),
+                 feedback_notifier.py (канал доставки обращений, заглушка LogNotifier)
+  notification_categories.py  категории уведомлений ↔ типы событий
   recurrence.py  движок повторений (чистые функции): якорь, clamp, -1, yearly, until, normalize_rule
   utils.py       generate_occurrences (тонкая обёртка над движком), shift_time_by_minutes, normalize_phone
   event_time.py  время события: UTC на проводе ↔ локальное в БД (time_to_stored / time_to_wire)
   backends.py    PhoneBackend (вход в Django Admin по телефону)
-  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_event_time/test_recurrence_* (vectors/api/slots)
+  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_profile_avatar/test_account_deletion/test_feedback/test_notification_settings/test_event_time/test_recurrence_* (vectors/api/slots)
   tests/data/recurrence_vectors.json  общие векторы повторений (те же, что в мобильном приложении)
-  migrations/    0001..0020
+  migrations/    0001..0023
 ```
 
 ## Соглашения проекта
@@ -75,6 +78,25 @@ tracker/
    `/pets/{id}/upcoming/` у событий `pet_obj` нет (клиент берёт питомца по `pet` из своего списка).
 8. **Секреты.** `.env` и `firebase-key.json` в `.gitignore` — никогда не коммитить. Push не работает, если
    `firebase-key.json` отсутствует в корне проекта.
+
+## Раздел «Профиль» (контракт)
+
+- `GET /profile/` → `id, phone_number, name, avatar (абсолютный URL | null), notification_settings, is_verified, created_at`.
+- `PATCH /profile/` (JSON или multipart): `name` (≤50, пустая строка очищает), `avatar` (JPG/PNG/HEIC ≤10 МБ → JPEG ≤1024 px).
+  **Номер телефона изменить нельзя** (поле игнорируется), PUT и DELETE на `/profile/` не поддерживаются.
+- `DELETE /profile/avatar/` — 204, идемпотентно.
+- `GET/PATCH /profile/notification-settings/` — карта `walks|feeding|medications|vaccinations|vet_visits → bool`;
+  хранятся только отключённые категории (`NotificationSettings.disabled_categories`), по умолчанию включено всё.
+  Соответствие типам событий — `tracker/notification_categories.py`; типы вне соответствия (grooming, bathing,
+  nailTrimming, custom) уведомляют всегда. Фильтр — в `_notify_slot` **до** занятия `EventNotificationLog`.
+- Удаление аккаунта: `POST /profile/delete/send-code/` (звонок, 429 чаще раза в минуту) → `POST /profile/delete/` `{code}` → 204.
+  Код хранится в кэше (5 мин, 5 попыток), отдельно от кода входа, в логи не пишется. Удаление атомарно:
+  refresh-токены в blacklist, каскадное удаление, файлы (аватар, фото питомцев) удаляются через storage `on_commit`.
+- `POST /feedback/` — `topic` problem|idea|question, `message` 1–2000, `screenshot` ≤10 МБ, данные устройства; лимит 5/час
+  (`FEEDBACK_THROTTLE_RATE`). Доставка — Celery `deliver_feedback` через `FEEDBACK_NOTIFIER` (по умолчанию
+  `LogNotifier`-заглушка; для Telegram-бота — новый класс с `send(feedback)` и смена настройки).
+- Медиа: `MEDIA_ROOT`/`MEDIA_STORAGE_BACKEND` из env, в prod — том `media`; `/media/` отдаёт Django при DEBUG или `SERVE_MEDIA=1`.
+  Файлы удалять только через storage API (`field.storage.delete`), не через `os`.
 
 ## Тесты и проверки
 

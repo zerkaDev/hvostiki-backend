@@ -4,13 +4,15 @@ from collections import defaultdict
 from datetime import timedelta
 import jwt
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Q
 from django.utils.dateparse import parse_date, parse_time
 from django.utils import timezone
 from django.core.cache import cache
 from rest_framework import status, permissions, viewsets, generics
 from rest_framework.decorators import action
-from rest_framework.exceptions import MethodNotAllowed, ValidationError
+from rest_framework.exceptions import MethodNotAllowed, ValidationError, Throttled
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.exceptions import TokenError
@@ -23,9 +25,11 @@ from tracker.models import User, Pet, Breed, PetType, Event, EventCompletion, FC
 from tracker.serializers import (
     PhoneNumberSerializer, VerifyCodeSerializer, UserSerializer, 
     PetSerializer, PetCreateSerializer, BreedSerializer, EventSerializer,
-    DeviceRegistrationSerializer
+    DeviceRegistrationSerializer, DeleteAccountSerializer, FeedbackSerializer,
+    NotificationSettingsSerializer
 )
-from tracker.tasks import send_confirmation_code
+from tracker.tasks import send_confirmation_code, deliver_feedback
+from tracker.services import account_deletion
 from tracker.recurrence import event_slots
 from tracker.event_time import time_to_stored
 from tracker.utils import generate_occurrences
@@ -160,7 +164,7 @@ class SendCodeView(APIView):
         if not settings.DEBUG:
             send_confirmation_code.delay(phone_number, code)
 
-        logger.info(f'Код {code} отправлен на номер {phone_number}')
+        logger.info('Код подтверждения отправлен на номер %s', phone_number)
         cache.set(cache_key, True, timeout=60)
 
         return Response({
@@ -305,17 +309,111 @@ class LogoutView(APIView):
 
 @extend_schema_view(
     get=schemas.PROFILE_SCHEMA_GET,
-    put=schemas.PROFILE_SCHEMA_PUT,
     patch=schemas.PROFILE_SCHEMA_PATCH,
-    delete=schemas.PROFILE_SCHEMA_DELETE,
 )
-class ProfileView(generics.RetrieveUpdateDestroyAPIView):
-    """Профиль текущего пользователя (просмотр, обновление, удаление)"""
+class ProfileView(generics.RetrieveUpdateAPIView):
+    """Профиль текущего пользователя: просмотр и обновление имени и фото.
+
+    Номер телефона изменить нельзя; PUT не поддерживается — только PATCH.
+    """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = UserSerializer
+    http_method_names = ['get', 'patch', 'head', 'options']
 
     def get_object(self):
         return self.request.user
+
+
+@extend_schema_view(
+    get=schemas.NOTIFICATION_SETTINGS_GET_SCHEMA,
+    patch=schemas.NOTIFICATION_SETTINGS_PATCH_SCHEMA,
+)
+class NotificationSettingsView(generics.GenericAPIView):
+    """Настройки уведомлений по категориям (переключатели применяются сразу)."""
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = NotificationSettingsSerializer
+
+    def get(self, request):
+        return Response(self.get_serializer(request.user).data)
+
+    def patch(self, request):
+        serializer = self.get_serializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.update(request.user, serializer.validated_data)
+        return Response(self.get_serializer(request.user).data)
+
+
+class ProfileAvatarView(APIView):
+    """Удаление фото профиля (идемпотентно)."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @schemas.PROFILE_AVATAR_DELETE_SCHEMA
+    def delete(self, request):
+        user = request.user
+        if user.avatar:
+            old_name = user.avatar.name
+            storage = user.avatar.storage
+            user.avatar = None
+            user.save(update_fields=['avatar', 'updated_at'])
+            transaction.on_commit(lambda: storage.delete(old_name))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class DeleteAccountSendCodeView(APIView):
+    """Шаг 1 удаления аккаунта: отправка кода звонком на номер пользователя."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @schemas.DELETE_ACCOUNT_SEND_CODE_SCHEMA
+    def post(self, request):
+        try:
+            account_deletion.send_deletion_code(request.user)
+        except account_deletion.CodeAlreadySent:
+            return Response(
+                {'detail': 'Код уже отправлен. Повторите попытку через минуту.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        return Response({
+            'detail': 'Код подтверждения отправлен',
+            'resend_timeout': account_deletion.RESEND_TIMEOUT,
+        })
+
+
+class DeleteAccountView(APIView):
+    """Шаг 2 удаления аккаунта: подтверждение кодом и безвозвратное удаление."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @schemas.DELETE_ACCOUNT_SCHEMA
+    def post(self, request):
+        serializer = DeleteAccountSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            account_deletion.check_deletion_code(
+                request.user, serializer.validated_data['code']
+            )
+        except account_deletion.InvalidDeletionCode as error:
+            return Response({'detail': error.message}, status=status.HTTP_400_BAD_REQUEST)
+
+        account_deletion.delete_account(request.user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class FeedbackView(generics.CreateAPIView):
+    """Обращение в поддержку: тема, текст, необязательный скриншот и данные устройства."""
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = FeedbackSerializer
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'feedback'
+
+    def throttled(self, request, wait):
+        raise Throttled(wait, detail='Слишком много обращений. Попробуйте позже.')
+
+    @schemas.FEEDBACK_SCHEMA
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        feedback = serializer.save(user=self.request.user)
+        transaction.on_commit(lambda: deliver_feedback.delay(feedback.pk))
 
 
 @extend_schema_view(**schemas.PET_VIEWSET_SCHEMAS)

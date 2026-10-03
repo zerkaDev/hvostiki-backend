@@ -5,6 +5,8 @@ services:
       target: prod
     env_file:
       - .env
+    volumes:
+      - media:/app/media
     depends_on:
       - postgres
       - redis
@@ -18,6 +20,8 @@ services:
     command: celery -A config worker -l INFO
     env_file:
       - .env
+    volumes:
+      - media:/app/media
     depends_on:
       - redis
       - rabbitmq
@@ -53,3 +57,4 @@ services:
 
 volumes:
   pgdata:
+  media:

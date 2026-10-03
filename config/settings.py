@@ -183,7 +183,17 @@ REST_FRAMEWORK = {
         'rest_framework.parsers.FormParser',
         'rest_framework.parsers.MultiPartParser',  # Для загрузки файлов
     ],
+    'DEFAULT_THROTTLE_RATES': {
+        # Применяется только к view с throttle_scope = 'feedback'
+        'feedback': os.getenv('FEEDBACK_THROTTLE_RATE', '5/hour'),
+    },
 }
+
+# Канал доставки обращений из «Помощь и обратная связь».
+# Сейчас заглушка (лог); для Telegram-бота — свой класс с методом send(feedback).
+FEEDBACK_NOTIFIER = os.getenv(
+    'FEEDBACK_NOTIFIER', 'tracker.services.feedback_notifier.LogNotifier'
+)
 
 CELERY_BROKER_URL = 'amqp://guest:guest@rabbitmq:5672//'
 CELERY_RESULT_BACKEND = 'redis://redis:6379/2'
@@ -215,7 +225,27 @@ UCALLER_SERVICE_ID=os.getenv('UCALLER_SERVICE_ID')
 UCALLER_API_KEY=os.getenv('UCALLER_API_KEY')
 
 MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_ROOT = os.getenv('MEDIA_ROOT', os.path.join(BASE_DIR, 'media'))
+
+# Хранилище пользовательских файлов (аватары, фото питомцев, скриншоты обратной связи).
+# По умолчанию — файловая система (в Docker это именованный том ``media``).
+# Для переезда на S3-совместимое хранилище достаточно задать MEDIA_STORAGE_BACKEND
+# (например, ``storages.backends.s3.S3Storage``) — код приложения работает только
+# через storage API и от файловой системы не зависит.
+STORAGES = {
+    'default': {
+        'BACKEND': os.getenv(
+            'MEDIA_STORAGE_BACKEND', 'django.core.files.storage.FileSystemStorage'
+        ),
+    },
+    'staticfiles': {
+        'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+    },
+}
+
+# Отдавать /media/ самим Django (без отдельного веб-сервера). Включено в DEBUG
+# или явно через SERVE_MEDIA=1; в проде за nginx/CDN выключается.
+SERVE_MEDIA = DEBUG or os.getenv('SERVE_MEDIA') == '1'
 
 from pillow_heif import register_heif_opener
 register_heif_opener()
