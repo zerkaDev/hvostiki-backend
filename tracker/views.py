@@ -1,12 +1,15 @@
+import base64
+import binascii
 import random
 import logging
+import uuid
 from collections import defaultdict
 from datetime import timedelta
 import jwt
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
-from django.utils.dateparse import parse_date, parse_time
+from django.utils.dateparse import parse_date, parse_datetime, parse_time
 from django.utils import timezone
 from django.core.cache import cache
 from rest_framework import status, permissions, viewsets, generics
@@ -21,12 +24,12 @@ from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import extend_schema_view
 
-from tracker.models import User, Pet, Breed, PetType, Event, EventCompletion, FCMDevice
+from tracker.models import User, Pet, Breed, PetType, Event, EventCompletion, FCMDevice, Notification
 from tracker.serializers import (
     PhoneNumberSerializer, VerifyCodeSerializer, UserSerializer, 
     PetSerializer, PetCreateSerializer, BreedSerializer, EventSerializer,
     DeviceRegistrationSerializer, DeviceUnregistrationSerializer, DeleteAccountSerializer, FeedbackSerializer,
-    NotificationSettingsSerializer
+    NotificationSettingsSerializer, NotificationSerializer
 )
 from tracker.tasks import send_confirmation_code, deliver_feedback
 from tracker.services import account_deletion
@@ -629,3 +632,104 @@ class EventViewSet(viewsets.ModelViewSet):
             completions = completions.filter(occurrence_time=slot)
         completions.delete()
         return Response({'done': False})
+
+
+# --- Центр уведомлений ---
+
+NOTIFICATIONS_DEFAULT_LIMIT = 30
+NOTIFICATIONS_MAX_LIMIT = 100
+
+
+def _encode_notification_cursor(notification) -> str:
+    raw = f'{notification.created_at.isoformat()}|{notification.id}'
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def _decode_notification_cursor(cursor: str):
+    """Курсор → ``(created_at, id)``; на любой мусор поднимает ``ValueError``."""
+    try:
+        created_raw, id_raw = base64.urlsafe_b64decode(cursor.encode()).decode().split('|')
+        created_at = parse_datetime(created_raw)
+        notification_id = uuid.UUID(id_raw)
+    except (ValueError, binascii.Error):  # UnicodeDecodeError — подкласс ValueError
+        raise ValueError('Некорректный курсор')
+    if created_at is None:
+        raise ValueError('Некорректный курсор')
+    return created_at, notification_id
+
+
+class NotificationListView(APIView):
+    """Список уведомлений пользователя (от новых к старым), порциями по курсору."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @schemas.NOTIFICATION_LIST_SCHEMA
+    def get(self, request):
+        try:
+            limit = int(request.query_params.get('limit', NOTIFICATIONS_DEFAULT_LIMIT))
+        except ValueError:
+            limit = 0
+        if not 1 <= limit <= NOTIFICATIONS_MAX_LIMIT:
+            return Response(
+                {'detail': f'limit должен быть числом от 1 до {NOTIFICATIONS_MAX_LIMIT}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        queryset = Notification.objects.filter(user=request.user).select_related('event')
+        if request.query_params.get('unread', '').lower() in ('1', 'true'):
+            queryset = queryset.filter(read_at__isnull=True)
+
+        cursor = request.query_params.get('cursor')
+        if cursor:
+            try:
+                created_at, notification_id = _decode_notification_cursor(cursor)
+            except ValueError as exc:
+                return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            queryset = queryset.filter(
+                Q(created_at__lt=created_at) | Q(created_at=created_at, id__lt=notification_id)
+            )
+
+        page = list(queryset.order_by('-created_at', '-id')[:limit + 1])
+        has_more = len(page) > limit
+        page = page[:limit]
+
+        return Response({
+            'results': NotificationSerializer(page, many=True).data,
+            'next_cursor': _encode_notification_cursor(page[-1]) if has_more else None,
+            'unread_count': _unread_notifications(request.user),
+        })
+
+
+def _unread_notifications(user) -> int:
+    return Notification.objects.filter(user=user, read_at__isnull=True).count()
+
+
+class NotificationUnreadCountView(APIView):
+    """Число непрочитанных уведомлений (для бейджа на колокольчике)."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @schemas.NOTIFICATION_UNREAD_COUNT_SCHEMA
+    def get(self, request):
+        return Response({'unread_count': _unread_notifications(request.user)})
+
+
+class NotificationReadView(APIView):
+    """Отметить уведомление прочитанным (идемпотентно)."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @schemas.NOTIFICATION_READ_SCHEMA
+    def post(self, request, pk):
+        notifications = Notification.objects.filter(user=request.user, pk=pk)
+        if not notifications.exists():
+            return Response({'detail': 'Уведомление не найдено'}, status=status.HTTP_404_NOT_FOUND)
+        notifications.filter(read_at__isnull=True).update(read_at=timezone.now())
+        return Response({'unread_count': _unread_notifications(request.user)})
+
+
+class NotificationReadAllView(APIView):
+    """Отметить все уведомления прочитанными."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @schemas.NOTIFICATION_READ_ALL_SCHEMA
+    def post(self, request):
+        Notification.objects.filter(user=request.user, read_at__isnull=True).update(read_at=timezone.now())
+        return Response({'unread_count': 0})

@@ -31,13 +31,13 @@ config/          settings.py, urls.py, celery.py, wsgi/asgi
 tracker/
   models.py      User (UUID pk, логин = phone_number), Breed, Pet,
                  RecurrenceRule, Event, EventCompletion,
-                 EventNotificationLog, FCMDevice, NotificationSettings, Feedback
+                 EventNotificationLog, FCMDevice, NotificationSettings, Notification, Feedback
   serializers.py DRF-сериализаторы
   schemas.py     drf-spectacular схемы (документация эндпоинтов)
   views.py       APIView / ModelViewSet'ы
-  urls.py        маршруты (auth/*, profile/*, feedback/, breeds/, pets/, event_schedule/, devices/register/, devices/unregister/)
+  urls.py        маршруты (auth/*, profile/*, feedback/, breeds/, pets/, event_schedule/, devices/register/, devices/unregister/, notifications/*)
   tasks.py       Celery-задачи (send_confirmation_code, send_event_notifications,
-                 flush_expired_tokens)
+                 cleanup_old_notifications, flush_expired_tokens)
   services/      firebase_service.py (FCM), ucalles_service.py (звонки-коды),
                  avatar.py (обработка фото профиля), account_deletion.py (код и удаление аккаунта),
                  feedback_notifier.py (канал доставки обращений, заглушка LogNotifier)
@@ -48,7 +48,7 @@ tracker/
   backends.py    PhoneBackend (вход в Django Admin по телефону)
   tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_profile_avatar/test_account_deletion/test_feedback/test_notification_settings/test_devices/test_event_time/test_recurrence_* (vectors/api/slots)
   tests/data/recurrence_vectors.json  общие векторы повторений (те же, что в мобильном приложении)
-  migrations/    0001..0024
+  migrations/    0001..0025
 ```
 
 ## Соглашения проекта
@@ -174,3 +174,18 @@ docker compose -f docker-compose.dev.yml run --rm web python manage.py spectacul
 кода: остановить `web`, `celery` и `celery-beat`, развернуть образ, `python manage.py migrate`, запустить
 сервисы. Проверка: событие `time=14:05`, `timezone_offset=180` лежит в БД как 17:05, отдаётся как 14:05, пуш
 уходит в 17:05 МСК. Откат: прежний образ и `python manage.py migrate tracker 0017`.
+
+## Центр уведомлений (inbox)
+
+- Модель `Notification`: история пушей для экрана «Уведомления». Запись для напоминания о событии создаётся в
+  `_notify_slot` вместе с `EventNotificationLog` (OneToOne `log`): если отправка не удалась и лог снимается,
+  запись уходит по каскаду, повтор создаст её заново. Создаётся и без устройств. Отключённые категории ничего не
+  создают. `kind=announcement` — общие объявления без питомца/события (пока только из админки).
+- Текст: `title` = название события, `body` = описание, а без него `«{питомец}: пора выполнить»` (накануне —
+  `«{питомец}: напоминание на завтра»`). Тот же текст идёт в пуш. Удаление питомца/события/пользователя каскадно
+  удаляет уведомления; история старше `NOTIFICATION_RETENTION_DAYS` (180) чистится `cleanup_old_notifications`.
+- `data` пуша: `notification_id`, `event_id` (UUID), `pet_id`, `event_type`, `type`, `date`, `time` (UTC, только
+  для событий с несколькими временами в день). `occurrence_time` в БД локальное, в API — UTC (`time_to_wire`).
+- API: `GET /notifications/` (`limit` 1–100, `cursor`, `unread=true`; ответ `results`, `next_cursor`,
+  `unread_count`), `GET /notifications/unread-count/`, `POST /notifications/{id}/read/` (идемпотентно, чужое — 404),
+  `POST /notifications/read-all/`. Пагинация — keyset по `(created_at, id)`; глобальной пагинации DRF в проекте нет.

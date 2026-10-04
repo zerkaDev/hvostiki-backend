@@ -200,6 +200,9 @@ FIREBASE_CREDENTIALS_FILE = os.getenv(
     'FIREBASE_CREDENTIALS_FILE', os.path.join(BASE_DIR, 'firebase-key.json')
 )
 
+# Сколько дней хранится история «Центра уведомлений» (чистит cleanup_old_notifications)
+NOTIFICATION_RETENTION_DAYS = int(os.getenv('NOTIFICATION_RETENTION_DAYS', '180'))
+
 CELERY_BROKER_URL = 'amqp://guest:guest@rabbitmq:5672//'
 CELERY_RESULT_BACKEND = 'redis://redis:6379/2'
 CELERY_ACCEPT_CONTENT = ['json']
@@ -212,6 +215,10 @@ CELERY_BEAT_SCHEDULE = {
         # (tracker.tasks), иначе beat отправит несуществующую задачу.
         'task': 'tracker.tasks.send_event_notifications',
         'schedule': 60.0,  # каждые 60 секунд
+    },
+    'cleanup-old-notifications-daily': {
+        'task': 'tracker.tasks.cleanup_old_notifications',
+        'schedule': crontab(hour=3, minute=30),
     },
     'flush-expired-jwt-tokens-daily': {
         # Таблицы token_blacklist растут вечно, чистим просроченные записи.

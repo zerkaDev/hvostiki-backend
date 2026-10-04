@@ -1,7 +1,7 @@
 from django.contrib import admin
 from tracker.models import (
     User, Breed, Pet, RecurrenceRule, Event,
-    EventNotificationLog, EventCompletion, Feedback
+    EventNotificationLog, EventCompletion, Feedback, Notification
 )
 
 
@@ -57,3 +57,12 @@ class FeedbackAdmin(admin.ModelAdmin):
     list_filter = ('topic', 'platform')
     search_fields = ('message', 'user__phone_number')
     readonly_fields = ('created_at', 'delivered_at')
+
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    """Просмотр истории; для объявлений (``kind=announcement``) достаточно заполнить пользователя, заголовок и текст."""
+    list_display = ('title', 'user', 'kind', 'pet', 'created_at', 'read_at')
+    list_filter = ('kind', 'created_at')
+    search_fields = ('title', 'body', 'user__phone_number')
+    raw_id_fields = ('user', 'pet', 'event', 'log')

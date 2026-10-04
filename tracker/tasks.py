@@ -1,4 +1,5 @@
 from celery import shared_task
+from django.conf import settings
 from django.core.management import call_command
 from django.utils import timezone
 import logging
@@ -6,7 +7,11 @@ from datetime import datetime, time, timedelta
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 
-from tracker.models import Event, EventNotificationLog, EventCompletion, EventNotificationType, RecurrenceFrequency, FCMDevice, NotificationSettings
+from tracker.models import (
+    Event, EventNotificationLog, EventCompletion, EventNotificationType, RecurrenceFrequency, FCMDevice,
+    Notification, NotificationKind, NotificationSettings,
+)
+from tracker.event_time import time_to_wire
 
 from tracker.services.ucalles_service import UCallerService
 from tracker.services.firebase_service import firebase_service
@@ -57,6 +62,14 @@ def flush_expired_tokens():
     """Удаляет просроченные записи blacklist'а JWT (token_blacklist)."""
     call_command('flushexpiredtokens')
     return 'Done'
+
+
+@shared_task
+def cleanup_old_notifications():
+    """Удаляет из «Центра уведомлений» записи старше ``NOTIFICATION_RETENTION_DAYS`` дней."""
+    threshold = timezone.now() - timedelta(days=settings.NOTIFICATION_RETENTION_DAYS)
+    deleted, _ = Notification.objects.filter(created_at__lt=threshold).delete()
+    return f'Deleted: {deleted}'
 
 
 @shared_task
@@ -177,8 +190,18 @@ def _notify_slot(event, slot_time, multi_slot, now_utc):
         if disabled and category in disabled:
             return
 
+    # Текст уведомления: он же попадает в «Центр уведомлений». Имя питомца в заголовок не выносим:
+    # в приложении рядом показан его аватар, а кличку нельзя склонять на сервере.
+    title = event.title
+    if notification_type == EventNotificationType.REMINDER:
+        body = f"{event.pet.name}: напоминание на завтра"
+    else:
+        body = event.description or f"{event.pet.name}: пора выполнить"
+
     # «Занимаем» запись лога ДО отправки: уникальный индекс не даёт двум воркерам/запускам
-    # отправить одно и то же уведомление дважды. Если отправка упадёт — запись снимаем.
+    # отправить одно и то же уведомление дважды. Если отправка упадёт — запись снимаем
+    # (вместе с ней по каскаду уходит и запись «Центра уведомлений»). Запись создаётся и тогда,
+    # когда у пользователя нет устройств: история доступна и без пушей.
     try:
         with transaction.atomic():
             log = EventNotificationLog.objects.create(
@@ -187,21 +210,34 @@ def _notify_slot(event, slot_time, multi_slot, now_utc):
                 occurrence_time=occurrence_time,
                 notification_type=notification_type,
             )
+            notification = Notification.objects.create(
+                user=event.user,
+                kind=NotificationKind.EVENT,
+                title=title,
+                body=body,
+                pet=event.pet,
+                event=event,
+                event_type=event.type,
+                notification_type=notification_type,
+                occurrence_date=occurrence_date,
+                occurrence_time=slot_time,
+                log=log,
+            )
     except IntegrityError:
         return
 
-    # Формируем текст уведомления
-    title = f"{event.pet.name}: {event.title}"
-    if notification_type == EventNotificationType.REMINDER:
-        body = f"Напоминание: завтра в плане {event.title}"
-    else:
-        body = event.description or f"Пора выполнить: {event.title}"
-
     data = {
+        'notification_id': str(notification.id),
         'event_id': str(event.id),
+        'pet_id': str(event.pet_id),
+        'event_type': event.type,
         'type': notification_type,
         'date': occurrence_date.isoformat(),
-        **({'time': slot_time.strftime('%H:%M')} if multi_slot else {}),
+        # Время на проводе — UTC (как в остальном API), слот в БД хранится локальным
+        **(
+            {'time': time_to_wire(slot_time, event.timezone_offset).strftime('%H:%M')}
+            if multi_slot else {}
+        ),
     }
 
     # Отправка пуша на все устройства пользователя. Сбой одного устройства не мешает остальным;
