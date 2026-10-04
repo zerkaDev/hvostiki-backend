@@ -25,7 +25,7 @@ from tracker.models import User, Pet, Breed, PetType, Event, EventCompletion, FC
 from tracker.serializers import (
     PhoneNumberSerializer, VerifyCodeSerializer, UserSerializer, 
     PetSerializer, PetCreateSerializer, BreedSerializer, EventSerializer,
-    DeviceRegistrationSerializer, DeleteAccountSerializer, FeedbackSerializer,
+    DeviceRegistrationSerializer, DeviceUnregistrationSerializer, DeleteAccountSerializer, FeedbackSerializer,
     NotificationSettingsSerializer
 )
 from tracker.tasks import send_confirmation_code, deliver_feedback
@@ -235,14 +235,35 @@ class RegisterDeviceView(APIView):
         serializer = DeviceRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         fcm_token = serializer.validated_data['fcm_token']
+        platform = serializer.validated_data.get('platform')
 
-        # Если токен уже у кого-то есть, обновляем владельца
-        FCMDevice.objects.update_or_create(
-            fcm_token=fcm_token,
-            defaults={'user': request.user}
-        )
+        # Если токен уже у кого-то есть, обновляем владельца; платформу не затираем, если не прислали
+        defaults = {'user': request.user}
+        if platform:
+            defaults['platform'] = platform
+        FCMDevice.objects.update_or_create(fcm_token=fcm_token, defaults=defaults)
 
         return Response({'detail': 'Токен успешно зарегистрирован'}, status=status.HTTP_200_OK)
+
+
+class UnregisterDeviceView(APIView):
+    """Отвязка FCM токена (выход из аккаунта): уведомления на устройство перестают приходить.
+
+    Идемпотентно: удаляется только токен текущего пользователя, чужой или неизвестный токен
+    не считается ошибкой (и не раскрывает, кому он принадлежит).
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    @schemas.UNREGISTER_DEVICE_SCHEMA
+    def post(self, request):
+        serializer = DeviceUnregistrationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        FCMDevice.objects.filter(
+            user=request.user, fcm_token=serializer.validated_data['fcm_token']
+        ).delete()
+
+        return Response({'detail': 'Токен отвязан'}, status=status.HTTP_200_OK)
 
 
 def _token_jti(raw_token: str) -> str | None:

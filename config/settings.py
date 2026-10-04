@@ -195,6 +195,11 @@ FEEDBACK_NOTIFIER = os.getenv(
     'FEEDBACK_NOTIFIER', 'tracker.services.feedback_notifier.LogNotifier'
 )
 
+# Сервисный аккаунт Firebase для отправки push (FCM). Без файла push не отправляются.
+FIREBASE_CREDENTIALS_FILE = os.getenv(
+    'FIREBASE_CREDENTIALS_FILE', os.path.join(BASE_DIR, 'firebase-key.json')
+)
+
 CELERY_BROKER_URL = 'amqp://guest:guest@rabbitmq:5672//'
 CELERY_RESULT_BACKEND = 'redis://redis:6379/2'
 CELERY_ACCEPT_CONTENT = ['json']

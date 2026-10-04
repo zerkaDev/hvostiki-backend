@@ -35,7 +35,9 @@ UCALLER_API_KEY=
 - `.env` и `firebase-key.json` не коммитятся и должны быть переданы на сервер отдельно
 - `DEBUG` обязательно `0`: при `DEBUG=1` включается фиксированный код подтверждения
   `DEBUG_CONFIRMATION_CODE` и отладочные страницы
-- `firebase-key.json` кладётся в корень проекта, иначе push-уведомления молча не отправляются
+- `firebase-key.json` (сервисный аккаунт Firebase: Project settings → Service accounts → Generate new private key)
+  кладётся в корень проекта или путь к нему задаётся в `FIREBASE_CREDENTIALS_FILE`, иначе push-уведомления
+  молча не отправляются
 - Не забыть `python manage.py migrate`: refresh-токены используют приложение
   `token_blacklist` (его таблицы создаются миграциями)
 - Планировщик `celery-beat` обязателен — на нём висят напоминания о событиях

@@ -7,7 +7,7 @@ from tracker.serializers import (
     PhoneNumberSerializer, VerifyCodeSerializer, PetSerializer, 
     PetCreateSerializer, RefreshTokenSerializer, TokenResponseSerializer, 
     ErrorResponseSerializer, BreedSerializer, EventSerializer,
-    DeviceRegistrationSerializer, UserSerializer, DeleteAccountSerializer,
+    DeviceRegistrationSerializer, DeviceUnregistrationSerializer, UserSerializer, DeleteAccountSerializer,
     FeedbackSerializer, NotificationSettingsSerializer
 )
 
@@ -19,10 +19,25 @@ REGISTER_DEVICE_SCHEMA = extend_schema(
     description="""
     Регистрирует FCM токен устройства для текущего пользователя.
     Если токен уже существует у другого пользователя, он будет перепривязан к текущему.
+    `platform` (`ios` / `android`) необязателен: если не передан, ранее сохранённое значение не меняется.
     """,
     request=DeviceRegistrationSerializer,
     responses={
         200: OpenApiResponse(description='Токен успешно зарегистрирован'),
+        400: OpenApiResponse(description='Ошибка валидации'),
+    }
+)
+
+UNREGISTER_DEVICE_SCHEMA = extend_schema(
+    tags=['Устройства'],
+    summary='Отвязка FCM токена',
+    description="""
+    Удаляет FCM токен текущего пользователя (вызывается при выходе из аккаунта, до отзыва JWT).
+    Идемпотентно: если токена нет или он принадлежит другому пользователю, возвращается 200.
+    """,
+    request=DeviceUnregistrationSerializer,
+    responses={
+        200: OpenApiResponse(description='Токен отвязан'),
         400: OpenApiResponse(description='Ошибка валидации'),
     }
 )

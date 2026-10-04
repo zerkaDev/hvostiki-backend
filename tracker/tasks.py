@@ -197,19 +197,27 @@ def _notify_slot(event, slot_time, multi_slot, now_utc):
     else:
         body = event.description or f"Пора выполнить: {event.title}"
 
-    try:
-        # Отправка пуша на все устройства пользователя
-        for device in FCMDevice.objects.filter(user=event.user):
+    data = {
+        'event_id': str(event.id),
+        'type': notification_type,
+        'date': occurrence_date.isoformat(),
+        **({'time': slot_time.strftime('%H:%M')} if multi_slot else {}),
+    }
+
+    # Отправка пуша на все устройства пользователя. Сбой одного устройства не мешает остальным;
+    # если не дошло ни до одного — снимаем запись лога, и следующий запуск (в пределах окна) повторит.
+    delivered = 0
+    first_error = None
+    for device in FCMDevice.objects.filter(user=event.user):
+        try:
             firebase_service.send_push_notification(
-                token=device.fcm_token,
-                title=title,
-                body=body,
-                data={
-                    'event_id': str(event.id),
-                    'type': notification_type,
-                    **({'time': slot_time.strftime('%H:%M')} if multi_slot else {}),
-                },
+                token=device.fcm_token, title=title, body=body, data=data,
             )
-    except Exception:
-        log.delete()  # следующий запуск (в пределах окна) попробует снова
-        raise
+            delivered += 1
+        except Exception as exc:
+            logger.warning('send_event_notifications: сбой отправки на устройство %s', device.pk)
+            first_error = first_error or exc
+
+    if first_error is not None and not delivered:
+        log.delete()
+        raise first_error

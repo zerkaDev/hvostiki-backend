@@ -379,9 +379,17 @@ class EventCompletion(models.Model):
         ]
 
 
+class DevicePlatform(models.TextChoices):
+    IOS = 'ios', 'iOS'
+    ANDROID = 'android', 'Android'
+
+
 class FCMDevice(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fcm_devices')
     fcm_token = models.TextField(unique=True)
+    platform = models.CharField(
+        max_length=10, choices=DevicePlatform.choices, blank=True, default=''
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

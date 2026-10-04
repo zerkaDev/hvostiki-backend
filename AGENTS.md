@@ -35,7 +35,7 @@ tracker/
   serializers.py DRF-сериализаторы
   schemas.py     drf-spectacular схемы (документация эндпоинтов)
   views.py       APIView / ModelViewSet'ы
-  urls.py        маршруты (auth/*, profile/*, feedback/, breeds/, pets/, event_schedule/, devices/register/)
+  urls.py        маршруты (auth/*, profile/*, feedback/, breeds/, pets/, event_schedule/, devices/register/, devices/unregister/)
   tasks.py       Celery-задачи (send_confirmation_code, send_event_notifications,
                  flush_expired_tokens)
   services/      firebase_service.py (FCM), ucalles_service.py (звонки-коды),
@@ -46,9 +46,9 @@ tracker/
   utils.py       generate_occurrences (тонкая обёртка над движком), shift_time_by_minutes, normalize_phone
   event_time.py  время события: UTC на проводе ↔ локальное в БД (time_to_stored / time_to_wire)
   backends.py    PhoneBackend (вход в Django Admin по телефону)
-  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_profile_avatar/test_account_deletion/test_feedback/test_notification_settings/test_event_time/test_recurrence_* (vectors/api/slots)
+  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_profile_avatar/test_account_deletion/test_feedback/test_notification_settings/test_devices/test_event_time/test_recurrence_* (vectors/api/slots)
   tests/data/recurrence_vectors.json  общие векторы повторений (те же, что в мобильном приложении)
-  migrations/    0001..0023
+  migrations/    0001..0024
 ```
 
 ## Соглашения проекта
@@ -77,7 +77,7 @@ tracker/
    контракта с мобильным клиентом — не удалять. Исключение: в списках `/event_schedule/period/` и
    `/pets/{id}/upcoming/` у событий `pet_obj` нет (клиент берёт питомца по `pet` из своего списка).
 8. **Секреты.** `.env` и `firebase-key.json` в `.gitignore` — никогда не коммитить. Push не работает, если
-   `firebase-key.json` отсутствует в корне проекта.
+   файла ключа нет: по умолчанию `firebase-key.json` в корне, путь меняется переменной `FIREBASE_CREDENTIALS_FILE`.
 
 ## Раздел «Профиль» (контракт)
 
@@ -97,6 +97,20 @@ tracker/
   `LogNotifier`-заглушка; для Telegram-бота — новый класс с `send(feedback)` и смена настройки).
 - Медиа: `MEDIA_ROOT`/`MEDIA_STORAGE_BACKEND` из env, в prod — том `media`; `/media/` отдаёт Django при DEBUG или `SERVE_MEDIA=1`.
   Файлы удалять только через storage API (`field.storage.delete`), не через `os`.
+
+## Push-уведомления (FCM)
+
+- `POST /devices/register/` `{fcm_token, platform?}` (`platform` — `ios`|`android`, без него ранее сохранённое значение
+  не меняется); токен уже существующий у другого пользователя перепривязывается к текущему.
+- `POST /devices/unregister/` `{fcm_token}` — отвязка при выходе из аккаунта (вызывать до `/auth/logout/`, пока JWT
+  действует). Идемпотентно, чужой токен не удаляется.
+- `FirebaseService.send_push_notification`: `android.priority=high`, `apns-priority=10` и звук; токен, который FCM признал
+  недействительным (`UnregisteredError`, `SenderIdMismatchError`), удаляется из БД; прочие ошибки пробрасываются,
+  чтобы `_notify_slot` снял запись `EventNotificationLog` и повторил отправку в окне `NOTIFICATION_LOOKBACK`.
+  Сбой одного устройства не мешает остальным; запись снимается, только если не дошло ни до одного.
+- Данные пуша (`data`, только строки): `event_id`, `type` (`standard|reminder|final`), `date` (дата вхождения, ISO),
+  `time` (`HH:MM`, только при нескольких слотах в день). Мобильное приложение использует их при нажатии на уведомление.
+- `firebase-admin` в зависимостях обязателен: без него `HAS_FIREBASE=False` и пуши молча не уходят.
 
 ## Тесты и проверки
 
@@ -140,7 +154,7 @@ docker compose -f docker-compose.dev.yml run --rm web python manage.py spectacul
 - **`token_blacklist`** растёт: чистка висит на задаче `flush_expired_tokens` в beat, а `celery-beat`
   обязателен и в проде (`docker-compose.prod.yml`).
 - **Уведомления** рассылаются только тем устройствам, что зарегистрированы через `POST /devices/register/`;
-  без `firebase-key.json` отправка молча пропускается (в логах warning).
+  без ключа Firebase отправка молча пропускается (в логах warning).
 - Админка: вход staff-пользователя без пароля с пустым паролем разрешён только при `DEBUG=1`.
 
 ## Правила работы для агентов

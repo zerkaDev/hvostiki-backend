@@ -9,7 +9,7 @@ from tracker.recurrence import (
     END_TYPES, RuleError, check_end_against_start, derive_end_type, normalize_rule, normalize_times,
     parse_stored_times, recompute_until, rule_from_normalized,
 )
-from tracker.models import Feedback, NotificationSettings, User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
+from tracker.models import DevicePlatform, Feedback, NotificationSettings, User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
 
 from .event_time import time_to_stored, time_to_wire
 from .notification_categories import CATEGORIES
@@ -230,6 +230,14 @@ class RefreshTokenSerializer(serializers.Serializer):
 
 
 class DeviceRegistrationSerializer(serializers.Serializer):
+    fcm_token = serializers.CharField(required=True)
+    platform = serializers.ChoiceField(
+        choices=DevicePlatform.choices, required=False,
+        help_text='Платформа устройства: ios или android',
+    )
+
+
+class DeviceUnregistrationSerializer(serializers.Serializer):
     fcm_token = serializers.CharField(required=True)
 
 

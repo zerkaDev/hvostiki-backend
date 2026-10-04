@@ -12,7 +12,7 @@ from .views import (
     NotificationSettingsView,
     LogoutView,
     PetViewSet, RefreshTokenView, BreedListAPIView, EventViewSet,
-    RegisterDeviceView
+    RegisterDeviceView, UnregisterDeviceView
 )
 
 router = DefaultRouter()
@@ -25,6 +25,7 @@ urlpatterns = [
     path('auth/token/refresh/', RefreshTokenView.as_view(), name='token-refresh'),
     path('auth/logout/', LogoutView.as_view(), name='logout'),
     path('devices/register/', RegisterDeviceView.as_view(), name='register_device'),
+    path('devices/unregister/', UnregisterDeviceView.as_view(), name='unregister_device'),
     # Профиль
     path('profile/', ProfileView.as_view(), name='profile'),
     path('profile/notification-settings/', NotificationSettingsView.as_view(), name='profile-notification-settings'),
