@@ -561,7 +561,8 @@ class NotificationSerializer(serializers.ModelSerializer):
     def get_is_read(self, obj):
         return obj.read_at is not None
 
-    @extend_schema_field(OpenApiTypes.STR)
+    # allow_null: у объявления и у события с одним временем в день слота нет — в ответе null
+    @extend_schema_field({'type': 'string', 'nullable': True})
     def get_occurrence_time(self, obj):
         if obj.occurrence_time is None:
             return None
