@@ -4,7 +4,7 @@ from django.db.models import Q
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
-from rest_framework.exceptions import ErrorDetail
+from rest_framework.exceptions import APIException, ErrorDetail
 from tracker.recurrence import (
     END_TYPES, RuleError, check_end_against_start, derive_end_type, normalize_rule, normalize_times,
     parse_stored_times, recompute_until, rule_from_normalized,
@@ -13,6 +13,7 @@ from tracker.models import DevicePlatform, Feedback, NotificationSettings, User,
 
 from .event_time import time_to_stored, time_to_wire
 from .notification_categories import CATEGORIES
+from .services import feedback_logs
 from .services.avatar import process_avatar
 
 MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024
@@ -517,15 +518,23 @@ class EventCompletionSerializer(serializers.ModelSerializer):
         read_only_fields = ('done_at',)
 
 
+class PayloadTooLarge(APIException):
+    status_code = 413
+    default_detail = 'Файл слишком большой.'
+    default_code = 'payload_too_large'
+
+
 class FeedbackSerializer(serializers.ModelSerializer):
-    """Обращение из «Помощь и обратная связь» (скриншот необязателен, до 10 МБ)"""
+    """Обращение из «Помощь и обратная связь»: скриншот (до 10 МБ) и журнал приложения
+    (gzip, до 2 МБ, только на запись) необязательны."""
     message = serializers.CharField(max_length=2000, trim_whitespace=True)
     screenshot = serializers.ImageField(required=False, allow_null=True)
+    logs = serializers.FileField(required=False, allow_null=True, write_only=True)
 
     class Meta:
         model = Feedback
         fields = [
-            'id', 'topic', 'message', 'screenshot',
+            'id', 'topic', 'message', 'screenshot', 'logs',
             'app_version', 'build_number', 'platform', 'os_version', 'device_model',
         ]
         read_only_fields = ['id']
@@ -540,4 +549,17 @@ class FeedbackSerializer(serializers.ModelSerializer):
     def validate_screenshot(self, value):
         if value is not None and value.size > MAX_SCREENSHOT_BYTES:
             raise serializers.ValidationError('Файл слишком большой. Максимум — 10 МБ.')
+        return value
+
+    def validate_logs(self, value):
+        if value is None:
+            return value
+        if value.size > settings.FEEDBACK_LOGS_MAX_BYTES:
+            raise PayloadTooLarge('Журнал слишком большой.')
+        try:
+            feedback_logs.check_gzip(value, settings.FEEDBACK_LOGS_MAX_UNPACKED_BYTES)
+        except feedback_logs.LogsTooLarge:
+            raise PayloadTooLarge('Журнал слишком большой после распаковки.')
+        except feedback_logs.InvalidLogsArchive:
+            raise serializers.ValidationError('Журнал должен быть корректным gzip-файлом.')
         return value

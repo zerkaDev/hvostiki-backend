@@ -7,6 +7,7 @@ services:
       - .env
     volumes:
       - media:/app/media
+      - private_media:/app/private_media
     depends_on:
       - postgres
       - redis
@@ -22,6 +23,7 @@ services:
       - .env
     volumes:
       - media:/app/media
+      - private_media:/app/private_media
     depends_on:
       - redis
       - rabbitmq
@@ -58,3 +60,4 @@ services:
 volumes:
   pgdata:
   media:
+  private_media:

@@ -566,13 +566,20 @@ FEEDBACK_SCHEMA = extend_schema(
     summary='Отправить обращение',
     description='Принимает multipart или JSON. `topic`: problem | idea | question; '
                 '`message` — 1–2000 символов; `screenshot` — изображение до 10 МБ '
-                '(необязательно). Данные устройства приложение передаёт '
-                'автоматически. Не более 5 обращений в час (иначе 429).',
+                '(необязательно); `logs` — журнал работы приложения, gzip-файл '
+                '(`application/gzip`, внутри UTF-8 текст) до 2 МБ, после распаковки до 10 МБ '
+                '(необязательно, только multipart; в ответе не возвращается). Журнал '
+                'хранится в приватном хранилище 30 дней и доступен только поддержке. '
+                'Данные устройства приложение передаёт автоматически. '
+                'Не более 5 обращений в час (иначе 429).',
     tags=['Обратная связь'],
     request=FeedbackSerializer,
     responses={
         201: FeedbackSerializer,
-        400: OpenApiResponse(description='Ошибка валидации'),
+        400: OpenApiResponse(description='Ошибка валидации (в том числе `logs` не gzip)'),
+        413: OpenApiResponse(
+            description='Журнал `logs` больше 2 МБ или больше 10 МБ после распаковки'
+        ),
         429: OpenApiResponse(description='Слишком много обращений'),
     },
 )

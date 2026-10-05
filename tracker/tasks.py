@@ -1,4 +1,5 @@
 from celery import shared_task
+from django.conf import settings
 from django.core.management import call_command
 from django.utils import timezone
 import logging
@@ -6,8 +7,9 @@ from datetime import datetime, time, timedelta
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 
-from tracker.models import Event, EventNotificationLog, EventCompletion, EventNotificationType, RecurrenceFrequency, FCMDevice, NotificationSettings
+from tracker.models import Event, EventNotificationLog, EventCompletion, EventNotificationType, Feedback, RecurrenceFrequency, FCMDevice, NotificationSettings
 
+from tracker.services import feedback_logs
 from tracker.services.ucalles_service import UCallerService
 from tracker.services.firebase_service import firebase_service
 from tracker.recurrence import event_slots
@@ -57,6 +59,22 @@ def flush_expired_tokens():
     """Удаляет просроченные записи blacklist'а JWT (token_blacklist)."""
     call_command('flushexpiredtokens')
     return 'Done'
+
+
+@shared_task
+def delete_expired_feedback_logs():
+    """Удаляет журналы приложения старше FEEDBACK_LOGS_RETENTION_DAYS (обращение остаётся)."""
+    cutoff = timezone.now() - timedelta(days=settings.FEEDBACK_LOGS_RETENTION_DAYS)
+    expired = (
+        Feedback.objects.filter(created_at__lt=cutoff)
+        .exclude(logs__isnull=True).exclude(logs='')
+    )
+    deleted = 0
+    for feedback_id, name in list(expired.values_list('pk', 'logs')):
+        feedback_logs.delete_files([name])
+        Feedback.objects.filter(pk=feedback_id).update(logs=None)
+        deleted += 1
+    return f'Deleted: {deleted}'
 
 
 @shared_task
