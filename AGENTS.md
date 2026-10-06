@@ -79,6 +79,19 @@ tracker/
 8. **Секреты.** `.env` и `firebase-key.json` в `.gitignore` — никогда не коммитить. Push не работает, если
    файла ключа нет: по умолчанию `firebase-key.json` в корне, путь меняется переменной `FIREBASE_CREDENTIALS_FILE`.
 
+## Вход (контракт)
+
+- `POST /auth/verify-code/` `{phone_number, code}` → `refresh, access, access_expires, refresh_expires` плюс
+  `is_new_user` (bool) и `user_id` (строка, тот же `id`, что в `GET /profile/`). Поля нужны мобильной аналитике;
+  `/auth/token/refresh/` их не возвращает.
+- Пользователь создаётся уже в `POST /auth/send-code/` (`get_or_create`), поэтому `is_new_user` — это **первое
+  успешное подтверждение номера** (`is_verified` был `False`), а не «запись создана в этом запросе».
+  Признак ставится атомарным условным UPDATE (`filter(pk, is_verified=False).update(...)`): при гонке или двойной
+  отправке `true` получит ровно один запрос. Неверный код признак не расходует. Повторный вход с любого
+  устройства — `false`. Удаление аккаунта полное (каскад), поэтому повторная регистрация того же номера создаёт
+  новую запись и снова даёт `true` (с новым `user_id`).
+- Старые версии приложения новые поля игнорируют, миграции не требуются.
+
 ## Раздел «Профиль» (контракт)
 
 - `GET /profile/` → `id, phone_number, name, avatar (абсолютный URL | null), notification_settings, is_verified, created_at`.

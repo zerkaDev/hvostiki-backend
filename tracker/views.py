@@ -187,6 +187,11 @@ class VerifyCodeView(APIView):
         serializer.is_valid(raise_exception=True)
         
         user = serializer.validated_data['user']
+        # Пользователь создаётся ещё при отправке кода (SendCodeView), поэтому «новый» — тот, кто
+        # подтверждает номер впервые. Условный UPDATE атомарен: при двойной отправке формы или
+        # гонке запросов «первым» станет ровно один.
+        is_new_user = User.objects.filter(pk=user.pk, is_verified=False).update(is_verified=True) == 1
+
         user.reset_code_attempts()
         user.is_verified = True
         user.last_login = timezone.now()
@@ -197,7 +202,9 @@ class VerifyCodeView(APIView):
             'refresh': str(refresh),
             'access': str(refresh.access_token),
             'access_expires': refresh.access_token.payload['exp'],
-            'refresh_expires': refresh.payload['exp']
+            'refresh_expires': refresh.payload['exp'],
+            'is_new_user': is_new_user,
+            'user_id': str(user.id),
         })
 
 
