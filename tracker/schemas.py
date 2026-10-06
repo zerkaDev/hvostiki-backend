@@ -1,6 +1,6 @@
-from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample, OpenApiParameter
+from drf_spectacular.utils import extend_schema, inline_serializer, OpenApiResponse, OpenApiExample, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
-from rest_framework import status
+from rest_framework import serializers, status
 
 from tracker.models import PetType
 from tracker.serializers import (
@@ -8,7 +8,7 @@ from tracker.serializers import (
     PetCreateSerializer, RefreshTokenSerializer, TokenResponseSerializer, 
     ErrorResponseSerializer, BreedSerializer, EventSerializer,
     DeviceRegistrationSerializer, DeviceUnregistrationSerializer, UserSerializer, DeleteAccountSerializer,
-    FeedbackSerializer, NotificationSettingsSerializer
+    FeedbackSerializer, NotificationSettingsSerializer, NotificationSerializer
 )
 
 # --- Authentication ---
@@ -589,4 +589,64 @@ PROFILE_AVATAR_DELETE_SCHEMA = extend_schema(
     description='Удаляет фото профиля. Если фото нет — всё равно 204 (идемпотентно).',
     tags=['Профиль'],
     responses={204: None}
+)
+
+
+# --- Центр уведомлений ---
+
+NOTIFICATION_LIST_SCHEMA = extend_schema(
+    tags=['Уведомления'],
+    summary='Центр уведомлений: список',
+    description="""
+    История уведомлений текущего пользователя от новых к старым, порциями по курсору.
+
+    Первая страница — без `cursor`; следующая — с `cursor` из `next_cursor` (`null` — страниц больше нет).
+    `unread_count` — число ВСЕХ непрочитанных пользователя (не зависит от `unread`, `cursor` и `limit`).
+    `occurrence_time` — время в UTC (`HH:MM`), как и остальное время в API; может быть `null`.
+    Для `kind=announcement` поля `pet_id`, `event_id`, `occurrence_*` пустые. История хранится 180 дней.
+    """,
+    parameters=[
+        OpenApiParameter(name='limit', type=OpenApiTypes.INT, location=OpenApiParameter.QUERY,
+                         description='Размер страницы: 1–100, по умолчанию 30'),
+        OpenApiParameter(name='cursor', type=OpenApiTypes.STR, location=OpenApiParameter.QUERY,
+                         description='Курсор следующей страницы из `next_cursor`'),
+        OpenApiParameter(name='unread', type=OpenApiTypes.BOOL, location=OpenApiParameter.QUERY,
+                         description='`true` — только непрочитанные'),
+    ],
+    responses={
+        200: OpenApiResponse(
+            response=inline_serializer('NotificationListResponse', {
+                'results': NotificationSerializer(many=True),
+                'next_cursor': serializers.CharField(allow_null=True),
+                'unread_count': serializers.IntegerField(),
+            }),
+            description='Страница уведомлений',
+        ),
+        400: OpenApiResponse(response=ErrorResponseSerializer, description='Некорректные limit или cursor'),
+    },
+)
+
+NOTIFICATION_UNREAD_COUNT_SCHEMA = extend_schema(
+    tags=['Уведомления'],
+    summary='Число непрочитанных уведомлений',
+    description='Лёгкий запрос для бейджа на колокольчике.',
+    responses={200: inline_serializer('UnreadCountResponse', {'unread_count': serializers.IntegerField()})},
+)
+
+NOTIFICATION_READ_SCHEMA = extend_schema(
+    tags=['Уведомления'],
+    summary='Отметить уведомление прочитанным',
+    description='Идемпотентно: повторный вызов ничего не меняет. Чужое или несуществующее уведомление — 404.',
+    request=None,
+    responses={
+        200: inline_serializer('NotificationReadResponse', {'unread_count': serializers.IntegerField()}),
+        404: OpenApiResponse(response=ErrorResponseSerializer, description='Уведомление не найдено'),
+    },
+)
+
+NOTIFICATION_READ_ALL_SCHEMA = extend_schema(
+    tags=['Уведомления'],
+    summary='Отметить все уведомления прочитанными',
+    request=None,
+    responses={200: inline_serializer('NotificationReadAllResponse', {'unread_count': serializers.IntegerField()})},
 )

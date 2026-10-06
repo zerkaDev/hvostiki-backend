@@ -400,6 +400,68 @@ class FCMDevice(models.Model):
         verbose_name_plural = 'FCM устройства'
 
 
+class NotificationKind(models.TextChoices):
+    EVENT = 'event', 'Напоминание о событии'
+    ANNOUNCEMENT = 'announcement', 'Объявление'
+
+
+class Notification(models.Model):
+    """Уведомление в «Центре уведомлений»: история пушей, которую видит пользователь.
+
+    Для напоминаний о событиях запись создаётся при рассылке (``send_event_notifications``) и связана
+    с ``EventNotificationLog``: если отправка не удалась и лог снимается, запись удаляется вместе
+    с ним, а повтор создаст её заново. ``announcement`` — общие объявления без питомца и события
+    (пока создаются только из админки). Записи старше ``NOTIFICATION_RETENTION_DAYS`` удаляет
+    ``cleanup_old_notifications``.
+
+    ``occurrence_time`` хранится в локальном времени события (как ``Event.time``); в API отдаётся в UTC.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User, related_name='notifications', on_delete=models.CASCADE, verbose_name='Пользователь'
+    )
+    kind = models.CharField(
+        max_length=16, choices=NotificationKind.choices, default=NotificationKind.EVENT
+    )
+    title = models.CharField(max_length=255)
+    body = models.TextField(blank=True)
+    pet = models.ForeignKey(
+        Pet, null=True, blank=True, related_name='notifications', on_delete=models.CASCADE
+    )
+    event = models.ForeignKey(
+        'Event', null=True, blank=True, related_name='notifications', on_delete=models.CASCADE
+    )
+    # Тип события на момент отправки: по нему мобильное приложение выбирает иконку
+    event_type = models.CharField(
+        max_length=32, choices=EventTypeChoices.choices, blank=True, default=''
+    )
+    notification_type = models.CharField(
+        max_length=16, choices=EventNotificationType.choices, blank=True, default=''
+    )
+    occurrence_date = models.DateField(null=True, blank=True)
+    occurrence_time = models.TimeField(null=True, blank=True)
+    log = models.OneToOneField(
+        'EventNotificationLog', null=True, blank=True, related_name='notification',
+        on_delete=models.CASCADE,
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = 'Уведомление'
+        verbose_name_plural = 'Уведомления'
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['user', '-created_at', '-id'], name='notif_user_created_idx'),
+            models.Index(
+                fields=['user'], condition=models.Q(read_at__isnull=True), name='notif_user_unread_idx'
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.title} ({self.user_id})'
+
+
 class NotificationSettings(models.Model):
     """Настройки уведомлений пользователя. Хранятся только отключённые категории:
     по умолчанию (и пока записи нет) включено всё, новые категории включаются сами."""

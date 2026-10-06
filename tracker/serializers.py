@@ -9,7 +9,7 @@ from tracker.recurrence import (
     END_TYPES, RuleError, check_end_against_start, derive_end_type, normalize_rule, normalize_times,
     parse_stored_times, recompute_until, rule_from_normalized,
 )
-from tracker.models import DevicePlatform, Feedback, NotificationSettings, User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
+from tracker.models import DevicePlatform, Feedback, Notification, NotificationSettings, User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
 
 from .event_time import time_to_stored, time_to_wire
 from .notification_categories import CATEGORIES
@@ -563,3 +563,30 @@ class FeedbackSerializer(serializers.ModelSerializer):
         except feedback_logs.InvalidLogsArchive:
             raise serializers.ValidationError('Журнал должен быть корректным gzip-файлом.')
         return value
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    """Элемент «Центра уведомлений». ``occurrence_time`` — в UTC (в БД хранится локальным)."""
+    is_read = serializers.SerializerMethodField()
+    occurrence_time = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Notification
+        fields = (
+            'id', 'kind', 'title', 'body', 'created_at', 'is_read',
+            'pet_id', 'event_id', 'event_type', 'notification_type',
+            'occurrence_date', 'occurrence_time',
+        )
+        read_only_fields = fields
+
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_is_read(self, obj):
+        return obj.read_at is not None
+
+    # allow_null: у объявления и у события с одним временем в день слота нет — в ответе null
+    @extend_schema_field({'type': 'string', 'nullable': True})
+    def get_occurrence_time(self, obj):
+        if obj.occurrence_time is None:
+            return None
+        offset = obj.event.timezone_offset if obj.event_id else 0
+        return time_to_wire(obj.occurrence_time, offset).strftime('%H:%M')

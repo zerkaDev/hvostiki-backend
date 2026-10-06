@@ -12,7 +12,8 @@ from .views import (
     NotificationSettingsView,
     LogoutView,
     PetViewSet, RefreshTokenView, BreedListAPIView, EventViewSet,
-    RegisterDeviceView, UnregisterDeviceView
+    RegisterDeviceView, UnregisterDeviceView,
+    NotificationListView, NotificationUnreadCountView, NotificationReadView, NotificationReadAllView,
 )
 
 router = DefaultRouter()
@@ -26,6 +27,11 @@ urlpatterns = [
     path('auth/logout/', LogoutView.as_view(), name='logout'),
     path('devices/register/', RegisterDeviceView.as_view(), name='register_device'),
     path('devices/unregister/', UnregisterDeviceView.as_view(), name='unregister_device'),
+    # Центр уведомлений
+    path('notifications/', NotificationListView.as_view(), name='notification-list'),
+    path('notifications/unread-count/', NotificationUnreadCountView.as_view(), name='notification-unread-count'),
+    path('notifications/read-all/', NotificationReadAllView.as_view(), name='notification-read-all'),
+    path('notifications/<uuid:pk>/read/', NotificationReadView.as_view(), name='notification-read'),
     # Профиль
     path('profile/', ProfileView.as_view(), name='profile'),
     path('profile/notification-settings/', NotificationSettingsView.as_view(), name='profile-notification-settings'),
