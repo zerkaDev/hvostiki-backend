@@ -2,6 +2,7 @@ import gzip
 import logging
 import os
 from datetime import timedelta
+from io import BytesIO
 from unittest.mock import patch
 
 import pytest
@@ -263,3 +264,82 @@ class TestLogsAdminDownload:
 
         assert not Feedback.objects.exists()
         assert not os.path.exists(path)
+
+
+def attach_screenshot(feedback):
+    """Прикладывает к обращению настоящий PNG (PIL) и возвращает URL файла в /media/."""
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new('RGB', (60, 40), (200, 30, 30)).save(buffer, format='PNG')
+    feedback.screenshot.save('screen.png', ContentFile(buffer.getvalue()), save=True)
+    return feedback.screenshot.url
+
+
+@pytest.mark.django_db
+class TestFeedbackAdminPreview:
+    """Колонка «Обратная связь» в списке: текст обращения, превью скриншота и журнал."""
+
+    @pytest.fixture
+    def staff(self, db):
+        return User.objects.create_superuser(phone_number='79990000003', password='pass-12345')
+
+    def changelist(self, client, staff):
+        client.force_login(staff)
+        response = client.get(reverse('admin:tracker_feedback_changelist'))
+        assert response.status_code == 200
+        return response.content.decode()
+
+    def test_column_shows_text_screenshot_and_logs(self, client, staff, user):
+        feedback = Feedback.objects.create(user=user, topic='problem', message='Не приходит пуш вечером')
+        screenshot_url = attach_screenshot(feedback)
+        feedback.logs.save('any.log.gz', ContentFile(gzip.compress(LOG_TEXT.encode())), save=True)
+
+        html = self.changelist(client, staff)
+
+        assert 'Обратная связь' in html  # заголовок колонки
+        assert 'Не приходит пуш вечером' in html
+        assert screenshot_url in html and f'<img src="{screenshot_url}"' in html
+        assert reverse('admin:tracker_feedback_change', args=[feedback.pk]) in html
+
+        # Журнал в списке не показываем: в колонке он весил бы отдельную подпись на каждую строку.
+        assert reverse('admin:tracker_feedback_logs', args=[feedback.pk]) not in html
+
+    def test_logs_link_is_in_change_page(self, client, staff, user):
+        feedback = make_feedback(user)
+        client.force_login(staff)
+
+        html = client.get(reverse('admin:tracker_feedback_change', args=[feedback.pk])).content.decode()
+
+        assert 'Скачать (.log.gz)' in html
+        assert reverse('admin:tracker_feedback_logs', args=[feedback.pk]) in html
+
+    def test_long_message_is_truncated(self, client, staff, user):
+        message = 'Слишком длинное обращение ' * 10
+        Feedback.objects.create(user=user, topic='idea', message=message)
+
+        html = self.changelist(client, staff)
+
+        assert message.strip() not in html
+        assert 'Слишком длинное обращение' in html and '…' in html
+
+    def test_feedback_without_attachments_still_listed(self, client, staff, user):
+        feedback = Feedback.objects.create(user=user, topic='question', message='Как сменить номер?')
+
+        html = self.changelist(client, staff)
+
+        assert 'Как сменить номер?' in html
+        assert reverse('admin:tracker_feedback_logs', args=[feedback.pk]) not in html
+
+    def test_change_page_groups_feedback_and_metadata(self, client, staff, user):
+        feedback = Feedback.objects.create(
+            user=user, topic='problem', message='Не приходит пуш', platform='ios', app_version='1.4.0',
+        )
+        screenshot_url = attach_screenshot(feedback)
+        client.force_login(staff)
+
+        html = client.get(reverse('admin:tracker_feedback_change', args=[feedback.pk])).content.decode()
+
+        assert 'Не приходит пуш' in html and 'ios' in html and '1.4.0' in html
+        assert screenshot_url in html
+        assert 'Техническая информация' in html

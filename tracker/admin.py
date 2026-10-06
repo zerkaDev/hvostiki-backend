@@ -63,17 +63,53 @@ class EventCompletionAdmin(admin.ModelAdmin):
 @admin.register(Feedback)
 class FeedbackAdmin(admin.ModelAdmin):
     list_display = (
-        'id', 'topic', 'user', 'platform', 'app_version', 'has_logs', 'created_at', 'delivered_at'
+        'id', 'topic', 'user', 'platform', 'app_version', 'feedback_preview', 'created_at',
+        'delivered_at',
     )
     list_filter = ('topic', 'platform')
     search_fields = ('message', 'user__phone_number')
     # Поле logs не выводим формой: у приватного файла нет URL, скачивание — через logs_link.
     exclude = ('logs',)
-    readonly_fields = ('created_at', 'delivered_at', 'logs_link')
+    readonly_fields = ('created_at', 'delivered_at', 'screenshot_preview', 'logs_link')
+    # Содержимое обращения — сверху и одним блоком: текст, скриншот и журнал.
+    fieldsets = (
+        ('Обратная связь', {
+            'fields': ('topic', 'message', 'screenshot', 'screenshot_preview', 'logs_link'),
+        }),
+        ('Техническая информация', {
+            'fields': (
+                'user', 'platform', 'app_version', 'build_number', 'os_version', 'device_model',
+                'created_at', 'delivered_at',
+            ),
+        }),
+    )
 
-    @admin.display(boolean=True, description='Журнал')
-    def has_logs(self, obj):
-        return bool(obj.logs)
+    @admin.display(description='Обратная связь', boolean=True)
+    def feedback_preview_is_visible(self, obj):
+        # Пустое обращение (текста нет, вложений нет) не показываем вовсе.
+        return bool(obj.message.strip() or obj.screenshot or obj.logs)
+
+    @admin.display(description='Обратная связь')
+    def feedback_preview(self, obj):
+        """Текст обращения в списке: ссылка на карточку, превью скриншота и журнал."""
+        url = reverse('admin:tracker_feedback_change', args=[obj.pk])
+        return format_html(
+            '<a href="{}" title="Открыть обращение">{}</a>{}',
+            url, self._short(obj.message), self._screenshot_links(obj),
+        )
+
+    feedback_preview.is_visible = feedback_preview_is_visible
+
+    @admin.display(description='Скриншот')
+    def screenshot_preview(self, obj):
+        """Карточка: превью скриншота, ссылка открывает оригинал в новой вкладке."""
+        if not obj.screenshot:
+            return '—'
+        return format_html(
+            '<a href="{}" target="_blank" rel="noopener">'
+            '<img src="{}" alt="Скриншот" style="max-width:600px;max-height:600px"></a>',
+            obj.screenshot.url, obj.screenshot.url,
+        )
 
     @admin.display(description='Журнал приложения')
     def logs_link(self, obj):
@@ -81,6 +117,22 @@ class FeedbackAdmin(admin.ModelAdmin):
             return '—'
         url = reverse('admin:tracker_feedback_logs', args=[obj.pk])
         return format_html('<a href="{}">Скачать (.log.gz)</a>', url)
+
+    def _short(self, message, limit=70):
+        message = (message or '').strip()
+        if not message:
+            return '—'
+        return message if len(message) <= limit else message[:limit] + '…'
+
+    def _screenshot_links(self, obj):
+        """Превью скриншота для списка: сам файл отдаётся по /media/, клик — оригинал."""
+        if not obj.screenshot:
+            return '—'
+        return format_html(
+            '<a href="{0}" target="_blank" rel="noopener">'
+            '<img src="{0}" alt="Скриншот" style="max-height:48px;vertical-align:middle"></a>',
+            obj.screenshot.url,
+        )
 
     def get_urls(self):
         download = path(
