@@ -12,7 +12,8 @@ from django.core.files.storage import default_storage
 from django.db import transaction
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 
-from tracker.models import Pet
+from tracker.models import Feedback, Pet
+from tracker.services import feedback_logs
 from tracker.tasks import send_confirmation_code
 
 logger = logging.getLogger(__name__)
@@ -91,8 +92,18 @@ def delete_account(user):
         for token in OutstandingToken.objects.filter(user=user):
             BlacklistedToken.objects.get_or_create(token=token)
 
+        # Обращения остаются (user станет NULL), но журналы приложения удаляются:
+        # в них могут быть данные пользователя.
+        feedbacks = (
+            Feedback.objects.filter(user=user)
+            .exclude(logs__isnull=True).exclude(logs='')
+        )
+        log_files = list(feedbacks.values_list('logs', flat=True))
+        feedbacks.update(logs=None)
+
         user.delete()
         transaction.on_commit(lambda: _delete_files(files))
+        transaction.on_commit(lambda: feedback_logs.delete_files(log_files))
 
     cache.delete_many([_key('code', user), _key('attempts', user), _key('sent', user)])
 

@@ -8,6 +8,8 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, Permis
 from django.utils import timezone
 import uuid
 
+from tracker.storage import private_storage
+
 
 class UserManager(BaseUserManager):
     def create_user(self, phone_number, password=None, **extra_fields):
@@ -420,6 +422,11 @@ def feedback_screenshot_path(instance, filename):
     return f'feedback/{timezone.now():%Y/%m/%d}/{uuid.uuid4().hex}.{ext}'
 
 
+def feedback_logs_path(instance, filename):
+    # Имя генерируется на сервере: имя из запроса в путь не попадает.
+    return f'feedback_logs/{timezone.now():%Y/%m/%d}/{uuid.uuid4().hex}.log.gz'
+
+
 class FeedbackTopic(models.TextChoices):
     PROBLEM = 'problem', 'Проблема'
     IDEA = 'idea', 'Идея'
@@ -434,6 +441,11 @@ class Feedback(models.Model):
     topic = models.CharField(max_length=20, choices=FeedbackTopic.choices)
     message = models.TextField()
     screenshot = models.ImageField(upload_to=feedback_screenshot_path, null=True, blank=True)
+    # Журнал работы приложения (gzip), приложенный пользователем; приватное хранилище,
+    # удаляется по сроку хранения и при удалении аккаунта.
+    logs = models.FileField(
+        upload_to=feedback_logs_path, storage=private_storage, null=True, blank=True
+    )
 
     # Техническая информация, добавляется приложением автоматически
     app_version = models.CharField(max_length=32, blank=True)

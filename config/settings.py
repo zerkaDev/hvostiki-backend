@@ -218,6 +218,11 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'tracker.tasks.flush_expired_tokens',
         'schedule': crontab(hour=3, minute=0),
     },
+    'delete-expired-feedback-logs-daily': {
+        # Журналы приложения хранятся FEEDBACK_LOGS_RETENTION_DAYS дней.
+        'task': 'tracker.tasks.delete_expired_feedback_logs',
+        'schedule': crontab(hour=3, minute=30),
+    },
 }
 
 AUTHENTICATION_BACKENDS = [
@@ -246,7 +251,21 @@ STORAGES = {
     'staticfiles': {
         'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
     },
+    # Приватные файлы (журналы приложения): без URL и вне MEDIA_ROOT, см. tracker/storage.py.
+    'private': {
+        'BACKEND': os.getenv(
+            'PRIVATE_STORAGE_BACKEND', 'tracker.storage.PrivateFileSystemStorage'
+        ),
+    },
 }
+
+PRIVATE_MEDIA_ROOT = os.getenv('PRIVATE_MEDIA_ROOT', os.path.join(BASE_DIR, 'private_media'))
+
+# Журнал приложения, приложенный к обращению: лимит gzip-файла, лимит после распаковки
+# и срок хранения (после него файл удаляется задачей beat, обращение остаётся).
+FEEDBACK_LOGS_MAX_BYTES = 2 * 1024 * 1024
+FEEDBACK_LOGS_MAX_UNPACKED_BYTES = 10 * 1024 * 1024
+FEEDBACK_LOGS_RETENTION_DAYS = int(os.getenv('FEEDBACK_LOGS_RETENTION_DAYS', '30'))
 
 # Отдавать /media/ самим Django (без отдельного веб-сервера). Включено в DEBUG
 # или явно через SERVE_MEDIA=1; в проде за nginx/CDN выключается.

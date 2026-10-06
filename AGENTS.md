@@ -95,6 +95,15 @@ tracker/
 - `POST /feedback/` — `topic` problem|idea|question, `message` 1–2000, `screenshot` ≤10 МБ, данные устройства; лимит 5/час
   (`FEEDBACK_THROTTLE_RATE`). Доставка — Celery `deliver_feedback` через `FEEDBACK_NOTIFIER` (по умолчанию
   `LogNotifier`-заглушка; для Telegram-бота — новый класс с `send(feedback)` и смена настройки).
+- Журнал приложения в обращении: необязательное multipart-поле `logs` (gzip, `application/gzip`, UTF-8 текст внутри)
+  в `POST /feedback/`; только на запись (в ответе нет). Лимиты: файл ≤ 2 МБ и ≤ 10 МБ после распаковки (потоковая
+  проверка, содержимое не разбирается) — иначе 413; не gzip или оборван — 400. Хранится в **приватном** хранилище
+  (`STORAGES['private']`, `PRIVATE_MEDIA_ROOT`, вне `MEDIA_ROOT`, без URL, имя файла генерирует сервер,
+  `tracker/storage.py`). Скачать может только staff с правом просмотра (Django Admin, ссылка в обращении; каждое
+  скачивание пишется в лог). Удаляется задачей `delete_expired_feedback_logs` (beat, раз в сутки) через
+  `FEEDBACK_LOGS_RETENTION_DAYS` (30) дней — обращение остаётся; при удалении аккаунта и при удалении обращения из
+  админки — сразу. Содержимое файла нигде не логируется. В prod том `private_media` монтируется в `web` и `celery`;
+  лимит тела запроса на уровне reverse proxy (если появится) должен быть не меньше ~2,5 МБ.
 - Медиа: `MEDIA_ROOT`/`MEDIA_STORAGE_BACKEND` из env, в prod — том `media`; `/media/` отдаёт Django при DEBUG или `SERVE_MEDIA=1`.
   Файлы удалять только через storage API (`field.storage.delete`), не через `os`.
 
