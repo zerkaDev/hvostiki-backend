@@ -7,7 +7,7 @@ from django.urls import path, reverse
 from django.utils.html import format_html
 from tracker.models import (
     User, Breed, Pet, RecurrenceRule, Event,
-    EventNotificationLog, EventCompletion, Feedback, Notification
+    EventNotificationLog, EventCompletion, Feedback, Notification, FCMDevice
 )
 from tracker.services import feedback_logs
 
@@ -180,3 +180,19 @@ class NotificationAdmin(admin.ModelAdmin):
     list_filter = ('kind', 'created_at')
     search_fields = ('title', 'body', 'user__phone_number')
     raw_id_fields = ('user', 'pet', 'event', 'log')
+
+
+@admin.register(FCMDevice)
+class FCMDeviceAdmin(admin.ModelAdmin):
+    """Устройства с push-токенами: нужны, чтобы проверить регистрацию и скопировать токен для тестовой отправки."""
+    list_display = ('user', 'platform', 'short_token', 'created_at', 'updated_at')
+    list_filter = ('platform',)
+    search_fields = ('user__phone_number', 'fcm_token')
+    raw_id_fields = ('user',)
+    readonly_fields = ('fcm_token', 'created_at', 'updated_at')
+    ordering = ('-updated_at',)
+
+    @admin.display(description='FCM-токен')
+    def short_token(self, obj):
+        token = obj.fcm_token
+        return f'{token[:12]}…{token[-6:]}' if len(token) > 20 else token
