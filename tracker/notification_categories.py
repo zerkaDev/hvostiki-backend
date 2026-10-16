@@ -1,27 +1,42 @@
 """Категории уведомлений раздела «Профиль → Уведомления» и их соответствие типам событий.
 
-Типы событий, которых нет в соответствии (груминг, купание, стрижка когтей, custom),
-не относятся ни к одной категории и отключаться не могут — уведомления по ним приходят всегда.
+Категории совпадают с группами типов в форме создания события: здоровье, уход, повседневные дела
+и другое. Каждый тип события относится ровно к одной категории.
 """
 from tracker.models import EventTypeChoices
 
 CATEGORY_EVENT_TYPES = {
-    'walks': (EventTypeChoices.WALKING,),
-    'feeding': (EventTypeChoices.FEEDING,),
-    'medications': (
+    'health': (
+        EventTypeChoices.VET_VISIT,
         EventTypeChoices.DAILY_PILLS,
         EventTypeChoices.WEEKLY_PILLS,
-        EventTypeChoices.DEWORMING,
-        EventTypeChoices.FLEA_TREATMENT,
-    ),
-    'vaccinations': (
         EventTypeChoices.YEARLY_VACCINATION,
         EventTypeChoices.RABIES_VACCINATION,
+        EventTypeChoices.FLEA_TREATMENT,
+        EventTypeChoices.DEWORMING,
     ),
-    'vet_visits': (EventTypeChoices.VET_VISIT,),
+    'care': (
+        EventTypeChoices.GROOMING,
+        EventTypeChoices.BATHING,
+        EventTypeChoices.NAIL_TRIMMING,
+    ),
+    'daily': (
+        EventTypeChoices.WALKING,
+        EventTypeChoices.FEEDING,
+    ),
+    'other': (EventTypeChoices.CUSTOM,),
 }
 
 CATEGORIES = tuple(CATEGORY_EVENT_TYPES)
+
+# Прежние категории (до 0029) и новые, в которые они вошли: нужны для переноса сохранённых настроек.
+LEGACY_CATEGORY_TARGETS = {
+    'walks': 'daily',
+    'feeding': 'daily',
+    'medications': 'health',
+    'vaccinations': 'health',
+    'vet_visits': 'health',
+}
 
 _EVENT_TYPE_TO_CATEGORY = {
     str(event_type): category
@@ -31,5 +46,5 @@ _EVENT_TYPE_TO_CATEGORY = {
 
 
 def category_for_event_type(event_type):
-    """Категория для типа события или ``None``, если тип нельзя отключить."""
+    """Категория для типа события или ``None`` для неизвестного типа (уведомляем всегда)."""
     return _EVENT_TYPE_TO_CATEGORY.get(str(event_type))

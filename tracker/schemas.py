@@ -662,17 +662,17 @@ DELETE_ACCOUNT_SCHEMA = extend_schema(
 
 NOTIFICATION_SETTINGS_GET_SCHEMA = extend_schema(
     summary='Настройки уведомлений',
-    description='Категории: walks (прогулки), feeding (кормление), medications '
-                '(лекарства, глистогонка, обработка от блох), vaccinations (прививки), '
-                'vet_visits (визиты к ветеринару). По умолчанию включено всё. '
-                'Остальные типы событий уведомляют всегда.',
+    description='Категории совпадают с группами типов события: health (визит к ветеринару, '
+                'лекарства, прививки, обработка от блох, глистогонка), care (груминг, купание, '
+                'стрижка когтей), daily (прогулки, кормление), other (другое). '
+                'По умолчанию включено всё.',
     tags=['Профиль'],
     responses={200: NotificationSettingsSerializer},
 )
 
 NOTIFICATION_SETTINGS_PATCH_SCHEMA = extend_schema(
     summary='Изменить настройки уведомлений',
-    description='Принимает любое подмножество ключей (например, `{"walks": false}`); '
+    description='Принимает любое подмножество ключей (например, `{"daily": false}`); '
                 'остальные категории не меняются. Возвращает полное состояние.',
     tags=['Профиль'],
     request=NotificationSettingsSerializer,

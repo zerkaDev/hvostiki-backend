@@ -315,7 +315,7 @@ class TestReminderNotifications:
 
     def test_disabled_category_is_skipped(self, user, pet):
         from tracker.models import NotificationSettings
-        NotificationSettings.objects.create(user=user, disabled_categories=['vet_visits'])
+        NotificationSettings.objects.create(user=user, disabled_categories=['health'])
         event = _event(user, pet, reminders=[10], type='vetVisit')
         _send(_utc(D, 14, 50))
         assert _logs(event) == []

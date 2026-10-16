@@ -260,7 +260,7 @@ class TestNotificationCreatedOnSend:
         assert Notification.objects.count() == 1
 
     def test_disabled_category_creates_nothing(self, user, pet):
-        NotificationSettings.objects.create(user=user, disabled_categories=['medications'])
+        NotificationSettings.objects.create(user=user, disabled_categories=['health'])
         self._timed_event(user, pet)
         with patch('django.utils.timezone.now', return_value=_at(date.today(), 9, 0)):
             send_event_notifications()

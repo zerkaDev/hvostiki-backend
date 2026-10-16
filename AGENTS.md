@@ -102,10 +102,12 @@ tracker/
 - `PATCH /profile/` (JSON или multipart): `name` (≤50, пустая строка очищает), `avatar` (JPG/PNG/HEIC ≤10 МБ → JPEG ≤1024 px).
   **Номер телефона изменить нельзя** (поле игнорируется), PUT и DELETE на `/profile/` не поддерживаются.
 - `DELETE /profile/avatar/` — 204, идемпотентно.
-- `GET/PATCH /profile/notification-settings/` — карта `walks|feeding|medications|vaccinations|vet_visits → bool`;
-  хранятся только отключённые категории (`NotificationSettings.disabled_categories`), по умолчанию включено всё.
-  Соответствие типам событий — `tracker/notification_categories.py`; типы вне соответствия (grooming, bathing,
-  nailTrimming, custom) уведомляют всегда. Фильтр — в `_notify_slot` **до** занятия `EventNotificationLog`.
+- `GET/PATCH /profile/notification-settings/` — карта `health|care|daily|other → bool` (группы типов, как в форме
+  создания события); хранятся только отключённые категории (`NotificationSettings.disabled_categories`), по
+  умолчанию включено всё. Соответствие типам событий — `tracker/notification_categories.py`, каждый тип в одной
+  категории. Миграция 0029 переносит прежние ключи (walks, feeding, medications, vaccinations, vet_visits):
+  новая категория выключена, только если выключены все прежние, которые в неё вошли. Отключённая категория
+  глушит и напоминания, выбранные пользователем. Фильтр — в `_notify_slot` **до** занятия `EventNotificationLog`.
 - Удаление аккаунта: `POST /profile/delete/send-code/` (звонок, 429 чаще раза в минуту) → `POST /profile/delete/` `{code}` → 204.
   Код хранится в кэше (5 мин, 5 попыток), отдельно от кода входа, в логи не пишется. Удаление атомарно:
   refresh-токены в blacklist, каскадное удаление, файлы (аватар, фото питомцев) удаляются через storage `on_commit`.

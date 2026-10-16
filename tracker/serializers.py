@@ -105,11 +105,10 @@ def notification_settings_for(user):
 
 class NotificationSettingsSerializer(serializers.Serializer):
     """Включённость категорий уведомлений. PATCH принимает любое подмножество ключей."""
-    walks = serializers.BooleanField(required=False)
-    feeding = serializers.BooleanField(required=False)
-    medications = serializers.BooleanField(required=False)
-    vaccinations = serializers.BooleanField(required=False)
-    vet_visits = serializers.BooleanField(required=False)
+    health = serializers.BooleanField(required=False)
+    care = serializers.BooleanField(required=False)
+    daily = serializers.BooleanField(required=False)
+    other = serializers.BooleanField(required=False)
 
     def to_representation(self, instance):
         return notification_settings_for(instance)
