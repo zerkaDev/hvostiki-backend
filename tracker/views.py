@@ -700,6 +700,15 @@ class EventViewSet(viewsets.ModelViewSet):
             return Response({'detail': str(exc)}, status=status.HTTP_409_CONFLICT)
         return self._occurrence_response(event, day, slot)
 
+    @action(detail=True, methods=['get'])
+    def series_stats(self, request, pk=None):
+        """Сколько вхождений осталось и прошло относительно даты (`?date=`)"""
+        event = self.get_object()
+        day = parse_date(request.query_params.get('date') or '')
+        if not day:
+            return Response({'detail': 'date is required'}, status=400)
+        return Response(occurrence_actions.series_stats(event, day))
+
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
         """Вернуть отменённое вхождение"""

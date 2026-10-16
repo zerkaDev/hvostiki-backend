@@ -3,11 +3,14 @@
 Вхождения не хранятся: отмена — это строка :class:`EventCancellation` на ``(event, date, slot)``,
 остановка серии («и все следующие») — отмена вхождения даты D плюс ``end_date`` правила = D.
 """
+from datetime import timedelta
+
 from django.db import transaction
 
 from tracker.models import Event, EventCancellation, EventCompletion, EventOccurrenceOverride
 from tracker.occurrence_state import slot_filter
 from tracker.recurrence import event_slots, recompute_until
+from tracker.utils import generate_occurrences
 
 
 class OccurrenceConflict(Exception):
@@ -67,3 +70,44 @@ def restore_occurrence(event, day, slot):
     """Возвращает отменённое вхождение (идемпотентно). Остановленная серия не удлиняется."""
     EventCancellation.objects.filter(slot_filter(event, slot), event=event, occurrence_date=day).delete()
     return event
+
+
+def series_stats(event, day):
+    """Сводка по серии относительно даты ``day`` (для подтверждения «Отменится N событий»).
+
+    * ``remaining`` — не отменённые вхождения с даты ``day`` до конца серии, каждое время в день
+      считается отдельным; ``None`` у бессрочной серии;
+    * ``past`` — не отменённые вхождения до даты ``day``;
+    * ``series_end`` — дата окончания серии (``None`` у бессрочной), ``is_open_ended`` — серия бессрочна;
+    * ``cancelled_dates`` — даты не ранее ``day``, на которые есть отмены (клиент по ним показывает
+      подсказку о сбросе отмен при смене расписания).
+    """
+    slots = event_slots(event)
+    rule = event.recurrence if event.is_recurring else None
+    until = (rule.until or rule.end_date) if rule is not None else event.start_date
+    is_open_ended = until is None
+
+    cancelled = {}
+    for cancel_day, cancel_time in EventCancellation.objects.filter(event=event).values_list(
+        'occurrence_date', 'occurrence_time',
+    ):
+        # запись без слота относится к первому (единственному) слоту
+        key = slots[0] if cancel_time is None else cancel_time
+        cancelled.setdefault(cancel_day, set()).add(key)
+
+    def count(date_from, date_to):
+        total = 0
+        for occurrence in generate_occurrences(event, date_from, date_to):
+            gone = cancelled.get(occurrence, set())
+            total += sum(1 for slot in slots if slot not in gone)
+        return total
+
+    past = count(event.start_date, day - timedelta(days=1)) if day > event.start_date else 0
+    remaining = None if is_open_ended else (count(day, until) if until >= day else 0)
+    return {
+        'remaining': remaining,
+        'past': past,
+        'series_end': until.isoformat() if until else None,
+        'is_open_ended': is_open_ended,
+        'cancelled_dates': sorted(d.isoformat() for d in cancelled if d >= day),
+    }

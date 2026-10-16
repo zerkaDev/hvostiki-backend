@@ -484,6 +484,28 @@ EVENT_VIEWSET_SCHEMAS = {
         ],
         tags=['events'],
     ),
+    'series_stats': extend_schema(
+        summary='Сводка по серии относительно даты',
+        description="""
+                Для подтверждения отмены «и все следующие»: `remaining` — не отменённые вхождения с даты
+                `date` до конца серии (каждое время в день считается отдельным; `null` у бессрочной
+                серии), `past` — не отменённые вхождения до `date`, `series_end` — дата окончания серии,
+                `is_open_ended` — серия бессрочна, `cancelled_dates` — даты не ранее `date` с отменами.
+                Склонения («событие/события») — на клиенте.
+                """,
+        parameters=[OpenApiParameter('date', OpenApiTypes.DATE, required=True, description='Дата вхождения D')],
+        responses={
+            200: inline_serializer('SeriesStats', fields={
+                'remaining': serializers.IntegerField(allow_null=True),
+                'past': serializers.IntegerField(),
+                'series_end': serializers.DateField(allow_null=True),
+                'is_open_ended': serializers.BooleanField(),
+                'cancelled_dates': serializers.ListField(child=serializers.DateField()),
+            }),
+            400: OpenApiResponse(description='Не передана date'),
+        },
+        tags=['events'],
+    ),
     'restore': extend_schema(
         summary='Вернуть отменённое вхождение',
         description="""
