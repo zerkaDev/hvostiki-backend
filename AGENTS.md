@@ -30,7 +30,7 @@ Backend приложения для учёта питомцев («Хвости�
 config/          settings.py, urls.py, celery.py, wsgi/asgi
 tracker/
   models.py      User (UUID pk, логин = phone_number), Breed, Pet,
-                 RecurrenceRule, Event, EventCompletion,
+                 RecurrenceRule, Event, EventCompletion, EventCancellation, EventOccurrenceOverride,
                  EventNotificationLog, FCMDevice, NotificationSettings, Notification, Feedback
   serializers.py DRF-сериализаторы
   schemas.py     drf-spectacular схемы (документация эндпоинтов)
@@ -42,6 +42,9 @@ tracker/
                  avatar.py (обработка фото профиля), account_deletion.py (код и удаление аккаунта),
                  feedback_notifier.py (канал доставки обращений, заглушка LogNotifier)
   notification_categories.py  категории уведомлений ↔ типы событий
+  occurrence_state.py   поиск отметок/отмен/правок по слоту (NULL-слот = первый слот)
+  occurrence_actions.py отмена вхождения/серии, возврат, series_stats
+  occurrence_edit.py    правка одной даты, разделение серии, сброс устаревших отмен и правок
   recurrence.py  движок повторений (чистые функции): якорь, clamp, -1, yearly, until, normalize_rule
   utils.py       generate_occurrences (тонкая обёртка над движком), shift_time_by_minutes, normalize_phone
   event_time.py  время события: UTC на проводе ↔ локальное в БД (time_to_stored / time_to_wire)
@@ -178,6 +181,15 @@ docker compose -f docker-compose.dev.yml run --rm web python manage.py spectacul
   (`time` слота, `done` по слоту). `EventCompletion`/`EventNotificationLog.occurrence_time` (NULL — «как раньше»,
   в многослотовом режиме NULL-отметка относится к первому слоту); `mark_done`/`mark_undone` при >1 слоте требуют
   `time`. Уведомления — по каждому слоту, в данных пуша `time`.
+- **Управление вхождением.** Вхождения не хранятся; их состояние — отдельные таблицы на `(event, date, slot)`:
+  `EventCompletion` (выполнено), `EventCancellation` (отменено), `EventOccurrenceOverride` (правка полей
+  `title`/`description`/`type`/`time` одной даты). `/period/` отдаёт `cancelled`, `done_at` (UTC, `Z`) и подставляет
+  правки; `/pets/{id}/upcoming/` и пуши отменённые пропускают. Эндпоинты `EventViewSet`: `cancel` (`scope=one|future`;
+  `future` = отмена даты D + `end_date` серии = D, состояние позже D удаляется), `restore`, `series_stats`
+  (`?date=D`: остаток/прошло без отменённых, слоты считаются отдельно), `edit` (`one` — правка; `future` — разделение
+  серии с переносом отметок/отмен/правок/журнала, с первой даты — обычное обновление). `mark_done` отменённого и
+  `cancel` выполненного — 409. `time` у многослотового события принимает исходный слот и время правки даты. Любое
+  обновление события сбрасывает отмены и правки дат и слотов, которых нет в новом расписании (`prune_state`).
 - **`token_blacklist`** растёт: чистка висит на задаче `flush_expired_tokens` в beat, а `celery-beat`
   обязателен и в проде (`docker-compose.prod.yml`).
 - **Уведомления** рассылаются только тем устройствам, что зарегистрированы через `POST /devices/register/`;
