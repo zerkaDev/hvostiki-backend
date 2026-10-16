@@ -16,6 +16,7 @@ from .occurrence_edit import prune_state
 from .occurrence_state import slot_filter
 
 from .event_time import time_to_stored, time_to_wire
+from .reminders import ReminderError, validate_reminders
 from .notification_categories import CATEGORIES
 from .services import feedback_logs
 from .services.avatar import process_avatar
@@ -296,6 +297,16 @@ class EventSerializer(serializers.ModelSerializer):
     recurrence = RecurrenceRuleSerializer(required=False, allow_null=True)
     # В запросах ждём time в UTC+0 и timezone_offset (минуты).
     timezone_offset = serializers.IntegerField(required=False)
+    # Напоминание: [минуты до вхождения] | [] (не напоминать) | null (как раньше), см. tracker/reminders.py
+    reminders = serializers.ListField(
+        child=serializers.IntegerField(), required=False, allow_null=True, allow_empty=True,
+        help_text=(
+            'Напоминание: `[минуты до вхождения]` (0 — в момент события), `[]` — не напоминать, `null` — '
+            'как раньше (в момент события; у «всего дня» 08:00 и накануне 21:00). Не больше одного значения, '
+            '0–43200 минут; у события «на весь день» кратно 1440, отсчёт от 09:00. В ответах списков — '
+            'значение с учётом правки вхождения.'
+        ),
+    )
 
     done = serializers.SerializerMethodField()
     cancelled = serializers.SerializerMethodField()
@@ -371,6 +382,7 @@ class EventSerializer(serializers.ModelSerializer):
             'is_recurring',
             'recurrence',
             'type',
+            'reminders',
             'done',
             'cancelled',
             'done_at',
@@ -423,7 +435,20 @@ class EventSerializer(serializers.ModelSerializer):
             start_date = data.get('start_date') or (self.instance.start_date if self.instance else None)
             self._rule_state = self._validate_rule(recurrence, start_date, data, effective_offset)
 
+        self._validate_reminders(data)
+
         return data
+
+    def _validate_reminders(self, data):
+        """Напоминание по итоговому состоянию: у события «на весь день» (без времени) — только целые сутки."""
+        if 'reminders' not in data and 'time' not in data:
+            return
+        reminders = data['reminders'] if 'reminders' in data else (self.instance.reminders if self.instance else None)
+        event_time = data['time'] if 'time' in data else (self.instance.time if self.instance else None)
+        try:
+            validate_reminders(reminders, all_day=event_time is None)
+        except ReminderError as exc:
+            raise serializers.ValidationError({'reminders': [str(exc)]})
 
     def _validate_rule(self, patch, start_date, data, offset):
         """Итоговое состояние правила (instance + patch): нормализация и проверка окончания."""
@@ -492,6 +517,8 @@ class EventSerializer(serializers.ModelSerializer):
                     rep[field] = value
             if override.time is not None:
                 shown_time = override.time
+            if override.reminders is not None:
+                rep['reminders'] = override.reminders
         if shown_time is not None:
             rep['time'] = time_to_wire(shown_time, instance.timezone_offset).isoformat()
         if rep.get('recurrence') and instance.recurrence and instance.recurrence.times:
@@ -558,6 +585,10 @@ class OccurrenceFieldsSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True)
     type = serializers.ChoiceField(choices=EventTypeChoices.choices, required=False)
     time = serializers.TimeField(required=False)
+    # [минуты до вхождения] | [] (не напоминать) | null (вернуть напоминание серии)
+    reminders = serializers.ListField(
+        child=serializers.IntegerField(), required=False, allow_null=True, allow_empty=True,
+    )
 
 
 class EventOccurrenceSerializer(serializers.Serializer):

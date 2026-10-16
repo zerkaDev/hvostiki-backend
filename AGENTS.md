@@ -45,13 +45,14 @@ tracker/
   occurrence_state.py   поиск отметок/отмен/правок по слоту (NULL-слот = первый слот)
   occurrence_actions.py отмена вхождения/серии, возврат, series_stats
   occurrence_edit.py    правка одной даты, разделение серии, сброс устаревших отмен и правок
+  reminders.py   напоминание о событии: валидация смещения, момент уведомления, текст «через 10 минут»
   recurrence.py  движок повторений (чистые функции): якорь, clamp, -1, yearly, until, normalize_rule
   utils.py       generate_occurrences (тонкая обёртка над движком), shift_time_by_minutes, normalize_phone
   event_time.py  время события: UTC на проводе ↔ локальное в БД (time_to_stored / time_to_wire)
   backends.py    PhoneBackend (вход в Django Admin по телефону)
   tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_profile_avatar/test_account_deletion/test_feedback/test_notification_settings/test_devices/test_event_time/test_recurrence_* (vectors/api/slots)
   tests/data/recurrence_vectors.json  общие векторы повторений (те же, что в мобильном приложении)
-  migrations/    0001..0025
+  migrations/    0001..0028
 ```
 
 ## Соглашения проекта
@@ -228,3 +229,23 @@ docker compose -f docker-compose.dev.yml run --rm web python manage.py spectacul
 - API: `GET /notifications/` (`limit` 1–100, `cursor`, `unread=true`; ответ `results`, `next_cursor`,
   `unread_count`), `GET /notifications/unread-count/`, `POST /notifications/{id}/read/` (идемпотентно, чужое — 404),
   `POST /notifications/read-all/`. Пагинация — keyset по `(created_at, id)`; глобальной пагинации DRF в проекте нет.
+
+## Напоминание о событии (`reminders`)
+
+- Поле `reminders` у `Event` и `EventOccurrenceOverride` (JSON, миграция 0028): `null` — «как раньше» (старые события и
+  старые клиенты: событие со временем уведомляет в момент события, «весь день» — в 08:00 дня события и накануне в
+  21:00); `[]` — не напоминать; `[m]` — за `m` минут до вхождения (`0` — в момент). В v1 не больше одного значения,
+  `0 ≤ m ≤ 43200` (30 дней); у события «на весь день» `m` кратно 1440, отсчёт от 09:00. Валидация —
+  `tracker/reminders.py`, нарушение — 400 `{'reminders': …}` (события) или `{'detail'}` (`edit`).
+- API: поле принимают создание, `PUT`/`PATCH` и `edit` (`scope=future` — из формы, при разделении серии новое событие
+  наследует значение серии; `scope=one` — пятое переопределяемое поле, `null` возвращает напоминание серии). В
+  `/period/`, `/pets/{id}/upcoming/` и ответах `edit` отдаётся значение с учётом правки вхождения. Смена `time` на
+  `null` вместе с минутами, не кратными суткам, — 400.
+- Рассылка (`tasks._due_occurrences`): если у вхождения (правка даты вытесняет событие) `reminders` задано,
+  уведомление уходит в момент «вхождение − смещение» (локальное время события, окно `NOTIFICATION_LOOKBACK`); правила
+  «как раньше» для этой даты отключаются. Тип: смещение 0 — `standard` (у «всего дня» `final`), больше 0 — `reminder`
+  с текстом «{питомец}: через 10 минут» / «завтра в 15:00» (`reminders.lead_text`). Отмены, отметки выполнения, правки
+  времени, слоты и категории настроек учитываются как раньше. Если момент уже прошёл при создании события, пуш не
+  уходит. Предфильтр `send_event_notifications` для событий с `reminders` смотрит вперёд до 30 дней, правки вхождений с
+  собственным напоминанием подгружаются одним запросом на запуск.
+- Ограничение: `timezone_offset` фиксируется при создании события, смена пояса пользователя уведомления не двигает.

@@ -322,6 +322,11 @@ class Event(models.Model):
         default=EventTypeChoices.CUSTOM,
     )
 
+    # Напоминание: смещения в минутах до вхождения (в v1 не больше одного элемента).
+    # NULL — «как раньше» (в момент события; у «всего дня» 08:00 и накануне 21:00), [] — не напоминать,
+    # [m] — за m минут (0 — в момент события). См. tracker/reminders.py.
+    reminders = models.JSONField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -429,6 +434,8 @@ class EventOccurrenceOverride(models.Model):
         max_length=32, choices=EventTypeChoices.choices, null=True, blank=True,
     )
     time = models.TimeField(null=True, blank=True)
+    # NULL — напоминание вхождения не переопределено; иначе то же значение, что ``Event.reminders``
+    reminders = models.JSONField(null=True, blank=True)
 
     updated_at = models.DateTimeField(auto_now=True)
 
