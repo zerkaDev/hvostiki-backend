@@ -24,7 +24,11 @@ from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import extend_schema_view
 
-from tracker.models import User, Pet, Breed, PetType, Event, EventCompletion, FCMDevice, Notification
+from tracker.models import (
+    User, Pet, Breed, PetType, Event, EventCompletion, EventCancellation, EventOccurrenceOverride,
+    FCMDevice, Notification,
+)
+from tracker.occurrence_state import find
 from tracker.serializers import (
     PhoneNumberSerializer, VerifyCodeSerializer, UserSerializer, 
     PetSerializer, PetCreateSerializer, BreedSerializer, EventSerializer,
@@ -63,12 +67,14 @@ def _in_window(events, date_from, date_to):
     )
 
 
-def group_occurrences(events, date_from, date_to, serializer_class, serializer_context=None):
+def group_occurrences(events, date_from, date_to, serializer_class, serializer_context=None, include_cancelled=True):
     """Разворачивает события в вхождения и группирует их по датам.
 
     Возвращает словарь вида ``{'2026-09-30': [событие, ...]}``: ключи
     отсортированы по дате, внутри даты события отсортированы по локальному времени.
     Используется и в ``/event_schedule/period/``, и в ``/pets/{id}/upcoming/``.
+    Отменённые вхождения отдаются с ``cancelled=true``; ``include_cancelled=False`` их пропускает.
+    Правки вхождений (``EventOccurrenceOverride``) подменяют название, заметки, тип и время.
     Бросает :class:`OccurrenceLimitError`, если вхождений больше ``MAX_OCCURRENCES_PER_RESPONSE``.
     """
     base_context = dict(serializer_context or {})
@@ -78,12 +84,23 @@ def group_occurrences(events, date_from, date_to, serializer_class, serializer_c
         events = _in_window(events, date_from, date_to)
     events = list(events)
 
-    # Отметки выполнения и данные питомцев — одним запросом/сериализацией, а не на каждое вхождение
-    base_context['completed'] = set(
-        EventCompletion.objects
-        .filter(event_id__in=[e.id for e in events], occurrence_date__gte=date_from, occurrence_date__lte=date_to)
-        .values_list('event_id', 'occurrence_date', 'occurrence_time')
-    )
+    # Отметки, отмены и правки вхождений — по одному запросу на окно, а не на каждое вхождение
+    event_ids = [e.id for e in events]
+    window = {'event_id__in': event_ids, 'occurrence_date__gte': date_from, 'occurrence_date__lte': date_to}
+    completions = {
+        (event_id, day, slot): done_at
+        for event_id, day, slot, done_at in
+        EventCompletion.objects.filter(**window).values_list('event_id', 'occurrence_date', 'occurrence_time', 'done_at')
+    }
+    base_context['completed'] = set(completions)
+    cancellations = {
+        key: True
+        for key in EventCancellation.objects.filter(**window).values_list('event_id', 'occurrence_date', 'occurrence_time')
+    }
+    overrides = {
+        (row.event_id, row.occurrence_date, row.occurrence_time): row
+        for row in EventOccurrenceOverride.objects.filter(**window)
+    }
     base_context['include_pet_obj'] = False
 
     total = 0
@@ -96,12 +113,19 @@ def group_occurrences(events, date_from, date_to, serializer_class, serializer_c
             # Не по строке time из ответа: в режиме utc оно сдвинуто на offset и «заворачивается»
             # через полночь, из-за чего 23:30 и 01:00 местного времени менялись местами.
             # События без времени («весь день») идут первыми.
-            sort_key = (
-                slot.hour * 3600 + slot.minute * 60 + slot.second - event.timezone_offset * 60
-                if slot
-                else float('-inf')
-            )
             for occurrence in occurrence_days:
+                lookup_slot = slot if multi_slot else None
+                is_cancelled = find(cancellations, event, occurrence, lookup_slot) is True
+                if is_cancelled and not include_cancelled:
+                    continue
+                override = find(overrides, event, occurrence, lookup_slot)
+                # Правка может сдвинуть время вхождения: порядок — по эффективному времени
+                effective = override.time if override is not None and override.time is not None else slot
+                sort_key = (
+                    effective.hour * 3600 + effective.minute * 60 + effective.second - event.timezone_offset * 60
+                    if effective
+                    else float('-inf')
+                )
                 total += 1
                 if total > MAX_OCCURRENCES_PER_RESPONSE:
                     logger.warning(
@@ -116,6 +140,9 @@ def group_occurrences(events, date_from, date_to, serializer_class, serializer_c
                         'occurrence_date': occurrence,
                         'slot_time': slot,
                         'occurrence_time': slot if multi_slot else None,
+                        'is_cancelled': is_cancelled,
+                        'done_at': find(completions, event, occurrence, lookup_slot),
+                        'override': override,
                     },
                 )
                 data = dict(serializer.data)
@@ -510,6 +537,7 @@ class PetViewSet(viewsets.ModelViewSet):
                     date_to,
                     EventSerializer,
                     self.get_serializer_context(),
+                    include_cancelled=False,
                 )
             )
         except OccurrenceLimitError:

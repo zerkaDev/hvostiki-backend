@@ -8,7 +8,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Q
 
 from tracker.models import (
-    Event, EventNotificationLog, EventCompletion, EventNotificationType, Feedback, RecurrenceFrequency,
+    Event, EventNotificationLog, EventCompletion, EventCancellation, EventOccurrenceOverride, EventNotificationType, Feedback, RecurrenceFrequency,
     FCMDevice, Notification, NotificationKind, NotificationSettings,
 )
 from tracker.event_time import time_to_wire
@@ -18,6 +18,7 @@ from tracker.services.ucalles_service import UCallerService
 from tracker.services.firebase_service import firebase_service
 from tracker.recurrence import event_slots
 from tracker.notification_categories import category_for_event_type
+from tracker import occurrence_state
 from tracker.utils import generate_occurrences
 
 # Beat и воркер могут сработать с задержкой, поэтому уведомление считается
@@ -158,10 +159,22 @@ def _notify_slot(event, slot_time, multi_slot, now_utc):
 
     # Смотрим текущие и предыдущие сутки: рассылка могла задержаться и
     # сработать уже после полуночи.
-    for day in (now_local.date(), (now_local - timedelta(days=1)).date()):
-        if slot_time is not None:
+    days = (now_local.date(), (now_local - timedelta(days=1)).date())
+    lookup_slot = slot_time if multi_slot else None
+    # Правки вхождений («изменить только эту дату») могут сдвинуть время, сменить название и тип
+    overrides = {
+        row.occurrence_date: row
+        for row in EventOccurrenceOverride.objects.filter(
+            occurrence_state.slot_filter(event, lookup_slot), event=event, occurrence_date__in=days,
+        )
+    }
+
+    for day in days:
+        override = overrides.get(day)
+        day_time = override.time if override is not None and override.time is not None else slot_time
+        if day_time is not None:
             # Scenario A: событие со временем (или один из слотов времени в день)
-            if _is_due(datetime.combine(day, slot_time), now_local):
+            if _is_due(datetime.combine(day, day_time), now_local):
                 notification_type = EventNotificationType.STANDARD
                 occurrence_date = day
                 break
@@ -186,6 +199,25 @@ def _notify_slot(event, slot_time, multi_slot, now_utc):
     if not generate_occurrences(event, occurrence_date, occurrence_date):
         return
 
+    # Отменённое вхождение не напоминаем
+    if EventCancellation.objects.filter(
+        occurrence_state.slot_filter(event, lookup_slot), event=event, occurrence_date=occurrence_date,
+    ).exists():
+        return
+
+    # Для напоминания накануне (21:00) дата вхождения — завтра: её правки в `overrides` могут не попасть
+    override = overrides.get(occurrence_date)
+    if override is None and occurrence_date not in days:
+        override = EventOccurrenceOverride.objects.filter(
+            occurrence_state.slot_filter(event, lookup_slot), event=event, occurrence_date=occurrence_date,
+        ).first()
+    event_type = override.type if override is not None and override.type is not None else event.type
+    event_title = override.title if override is not None and override.title is not None else event.title
+    event_description = (
+        override.description if override is not None and override.description is not None else event.description
+    )
+    shown_time = override.time if override is not None and override.time is not None else slot_time
+
     # Проверяем, не выполнено ли уже
     occurrence_time = slot_time if multi_slot else None
     done = EventCompletion.objects.filter(event=event, occurrence_date=occurrence_date)
@@ -199,7 +231,7 @@ def _notify_slot(event, slot_time, multi_slot, now_utc):
         return
 
     # Пользователь отключил эту категорию — не отправляем и не занимаем запись лога
-    category = category_for_event_type(event.type)
+    category = category_for_event_type(event_type)
     if category:
         disabled = NotificationSettings.objects.filter(user_id=event.user_id).values_list(
             'disabled_categories', flat=True
@@ -209,11 +241,11 @@ def _notify_slot(event, slot_time, multi_slot, now_utc):
 
     # Текст уведомления: он же попадает в «Центр уведомлений». Имя питомца в заголовок не выносим:
     # в приложении рядом показан его аватар, а кличку нельзя склонять на сервере.
-    title = event.title
+    title = event_title
     if notification_type == EventNotificationType.REMINDER:
         body = f"{event.pet.name}: напоминание на завтра"
     else:
-        body = event.description or f"{event.pet.name}: пора выполнить"
+        body = event_description or f"{event.pet.name}: пора выполнить"
 
     # «Занимаем» запись лога ДО отправки: уникальный индекс не даёт двум воркерам/запускам
     # отправить одно и то же уведомление дважды. Если отправка упадёт — запись снимаем
@@ -234,10 +266,10 @@ def _notify_slot(event, slot_time, multi_slot, now_utc):
                 body=body,
                 pet=event.pet,
                 event=event,
-                event_type=event.type,
+                event_type=event_type,
                 notification_type=notification_type,
                 occurrence_date=occurrence_date,
-                occurrence_time=slot_time,
+                occurrence_time=shown_time,
                 log=log,
             )
     except IntegrityError:
@@ -247,12 +279,12 @@ def _notify_slot(event, slot_time, multi_slot, now_utc):
         'notification_id': str(notification.id),
         'event_id': str(event.id),
         'pet_id': str(event.pet_id),
-        'event_type': event.type,
+        'event_type': event_type,
         'type': notification_type,
         'date': occurrence_date.isoformat(),
         # Время на проводе — UTC (как в остальном API), слот в БД хранится локальным
         **(
-            {'time': time_to_wire(slot_time, event.timezone_offset).strftime('%H:%M')}
+            {'time': time_to_wire(shown_time, event.timezone_offset).strftime('%H:%M')}
             if multi_slot else {}
         ),
     }

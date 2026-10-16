@@ -1,3 +1,5 @@
+from datetime import timezone as dt_timezone
+
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
@@ -9,7 +11,8 @@ from tracker.recurrence import (
     END_TYPES, RuleError, check_end_against_start, derive_end_type, normalize_rule, normalize_times,
     parse_stored_times, recompute_until, rule_from_normalized,
 )
-from tracker.models import DevicePlatform, Feedback, Notification, NotificationSettings, User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion
+from tracker.models import DevicePlatform, Feedback, Notification, NotificationSettings, User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion, EventCancellation
+from .occurrence_state import slot_filter
 
 from .event_time import time_to_stored, time_to_wire
 from .notification_categories import CATEGORIES
@@ -294,6 +297,38 @@ class EventSerializer(serializers.ModelSerializer):
     timezone_offset = serializers.IntegerField(required=False)
 
     done = serializers.SerializerMethodField()
+    cancelled = serializers.SerializerMethodField()
+    done_at = serializers.SerializerMethodField()
+
+    def _occurrence_lookup(self, obj):
+        """Дата и слот вхождения из контекста (для одиночного ответа — дата старта, без слота)."""
+        return self.context.get('occurrence_date') or obj.start_date, self.context.get('occurrence_time')
+
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_cancelled(self, obj):
+        """Отменено ли вхождение (в списках флаг приходит из контекста одним запросом на окно)."""
+        if 'is_cancelled' in self.context:
+            return self.context['is_cancelled']
+        occurrence_date, slot = self._occurrence_lookup(obj)
+        return EventCancellation.objects.filter(
+            slot_filter(obj, slot), event=obj, occurrence_date=occurrence_date,
+        ).exists()
+
+    @extend_schema_field(OpenApiTypes.DATETIME)
+    def get_done_at(self, obj):
+        """Когда вхождение отмечено выполненным (UTC) или ``null``, если не выполнено."""
+        if 'done_at' in self.context:
+            done_at = self.context['done_at']
+        else:
+            occurrence_date, slot = self._occurrence_lookup(obj)
+            done_at = (
+                EventCompletion.objects.filter(slot_filter(obj, slot), event=obj, occurrence_date=occurrence_date)
+                .values_list('done_at', flat=True).first()
+            )
+        if not done_at:
+            return None
+        # Как и время события, отдаём в UTC: клиент сам переведёт в местное
+        return done_at.astimezone(dt_timezone.utc).isoformat().replace('+00:00', 'Z')
 
     @extend_schema_field(OpenApiTypes.BOOL)
     def get_done(self, obj):
@@ -336,6 +371,8 @@ class EventSerializer(serializers.ModelSerializer):
             'recurrence',
             'type',
             'done',
+            'cancelled',
+            'done_at',
             'created_at',
             'updated_at',
         )
@@ -445,6 +482,15 @@ class EventSerializer(serializers.ModelSerializer):
         # Отдаём время в UTC+0.
         # В списках вхождение может относиться к слоту (несколько времён в день) — его время в контексте.
         shown_time = self.context.get('slot_time', instance.time)
+        # Правка вхождения («изменить только эту дату») подменяет поля события в этой записи
+        override = self.context.get('override')
+        if override is not None:
+            for field in ('title', 'description', 'type'):
+                value = getattr(override, field)
+                if value is not None:
+                    rep[field] = value
+            if override.time is not None:
+                shown_time = override.time
         if shown_time is not None:
             rep['time'] = time_to_wire(shown_time, instance.timezone_offset).isoformat()
         if rep.get('recurrence') and instance.recurrence and instance.recurrence.times:
