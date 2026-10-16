@@ -78,8 +78,8 @@ DATABASES = {
         'NAME': os.getenv('POSTGRES_DB'),
         'USER': os.getenv('POSTGRES_USER'),
         'PASSWORD': os.getenv('POSTGRES_PASSWORD'),
-        'HOST': 'postgres',
-        'PORT': '5432',
+        'HOST': os.getenv('POSTGRES_HOST', 'postgres'),
+        'PORT': os.getenv('POSTGRES_PORT', '5432'),
     }
 }
 
@@ -162,7 +162,7 @@ DEFAULT_FROM_EMAIL = ''
 CACHES = {
     'default': {
         'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': 'redis://redis:6379/1',
+        'LOCATION': os.getenv('CACHE_URL', 'redis://redis:6379/1'),
         'OPTIONS': {'CLIENT_CLASS': 'django_redis.client.DefaultClient'},
     }
 }
@@ -203,8 +203,10 @@ FIREBASE_CREDENTIALS_FILE = os.getenv(
 # Сколько дней хранится история «Центра уведомлений» (чистит cleanup_old_notifications)
 NOTIFICATION_RETENTION_DAYS = int(os.getenv('NOTIFICATION_RETENTION_DAYS', '180'))
 
-CELERY_BROKER_URL = 'amqp://guest:guest@rabbitmq:5672//'
-CELERY_RESULT_BACKEND = 'redis://redis:6379/2'
+# Кеш и брокер Celery. В dev-стеке имена хостов фиксированы (compose), в проде
+# адреса и креды брокера задаются переменными окружения.
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'amqp://guest:guest@rabbitmq:5672//')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://redis:6379/2')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
@@ -277,6 +279,26 @@ FEEDBACK_LOGS_RETENTION_DAYS = int(os.getenv('FEEDBACK_LOGS_RETENTION_DAYS', '30
 # Отдавать /media/ самим Django (без отдельного веб-сервера). Включено в DEBUG
 # или явно через SERVE_MEDIA=1; в проде за nginx/CDN выключается.
 SERVE_MEDIA = DEBUG or os.getenv('SERVE_MEDIA') == '1'
+
+# --- Прод-настройки безопасности ---
+# Включаются при DEBUG=0; в dev остаются выключенными, чтобы не ломать localhost.
+# За прокси (nginx) Django узнаёт о HTTPS из X-Forwarded-Proto — без этого
+# SECURE_SSL_REDIRECT уйдёт в бесконечный редирект.
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', '1') == '1'
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', 60 * 60 * 24 * 30))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = os.getenv('SECURE_HSTS_PRELOAD', '0') == '1'
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = 'same-origin'
+
+# Доверенные источники для админки за прокси (нужно для HTTPS-форм Django 4+).
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip() for origin in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if origin.strip()
+]
 
 from pillow_heif import register_heif_opener
 register_heif_opener()

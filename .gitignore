@@ -211,3 +211,9 @@ __marimo__/
 
 # Приватные файлы (журналы приложения)
 private_media/
+
+# Прод-секреты и данные сертификатов
+secrets/
+certbot/
+media/
+staticfiles/

@@ -43,3 +43,91 @@ UCALLER_API_KEY=
 - Планировщик `celery-beat` обязателен — на нём висят напоминания о событиях
   и очистка просроченных токенов, а также ежедневная чистка истории «Центра уведомлений»
   (`cleanup_old_notifications`: записи старше `NOTIFICATION_RETENTION_DAYS`, по умолчанию 180 дней)
+
+## Прод: деплой
+
+Прод-стек — `docker-compose.prod.yml`: nginx (80/443, статика, медиа) → gunicorn, плюс `celery`,
+`celery-beat`, `postgres`, `redis`, `rabbitmq`. Наружу открыты только 80 и 443, базы доступны лишь
+внутри сети compose. Миграции и `collectstatic` выполняет `entrypoint.sh` при старте `web`
+(в `celery`/`celery-beat` они выключены через `RUN_MIGRATIONS=0`).
+
+### Что нужно на сервере
+
+1. Docker с плагином compose, домен, направленный A-записью на сервер.
+2. `.env` из шаблона `.env.prod.example`:
+   ```
+   cp .env.prod.example .env
+   ```
+   Обязательно заполнить: `SECRET_KEY` (`python -c "import secrets; print(secrets.token_urlsafe(64))"`),
+   `POSTGRES_PASSWORD`, `RABBITMQ_DEFAULT_PASS` (и тот же пароль внутри `CELERY_BROKER_URL`),
+   `DJANGO_ALLOWED_HOSTS`, `SERVER_NAME`, `CSRF_TRUSTED_ORIGINS`, `UCALLER_SERVICE_ID`/`UCALLER_API_KEY`.
+   Проверить, что `DEBUG=0` и `SERVE_MEDIA=0` (медиа отдаёт nginx).
+3. Ключ Firebase рядом с проектом (он монтируется томом, а не копируется в образ):
+   ```
+   mkdir -p secrets && cp firebase-key.json secrets/firebase-key.json
+   ```
+4. Запуск:
+   ```
+   docker compose -f docker-compose.prod.yml up -d --build
+   docker compose -f docker-compose.prod.yml ps      # все сервисы healthy
+   curl -fsS http://127.0.0.1/healthz                # {"status": "ok"}
+   ```
+5. Суперпользователь для админки:
+   ```
+   docker compose -f docker-compose.prod.yml exec web manage createsuperuser
+   ```
+   (`manage` — режим entrypoint: команда выполняется от пользователя приложения.)
+
+### HTTPS (Let's Encrypt)
+
+Сертификата при первом запуске ещё нет, поэтому в `nginx/conf.d/default.conf.template` блок
+`listen 443 ssl` закомментирован — сначала поднимаем HTTP, выпускаем сертификат, затем включаем HTTPS:
+
+```
+mkdir -p certbot/conf certbot/www
+docker compose -f docker-compose.prod.yml run --rm --entrypoint certbot certbot certonly \
+  --webroot -w /var/www/certbot -d api.example.com --email you@example.com --agree-tos --no-eff-email
+```
+
+Далее раскомментировать блок `# --- HTTPS ---` в шаблоне (там `SERVER_NAME` подставится в пути
+к сертификату) и перезапустить nginx:
+
+```
+docker compose -f docker-compose.prod.yml restart nginx
+```
+
+Продление — по крону сервера (сертификат живёт 90 дней):
+```
+docker compose -f docker-compose.prod.yml run --rm --entrypoint certbot certbot renew --webroot -w /var/www/certbot
+docker compose -f docker-compose.prod.yml restart nginx
+```
+
+### Обновление версии
+
+```
+git pull
+docker compose -f docker-compose.prod.yml up -d --build   # entrypoint применит миграции
+```
+
+Миграции, меняющие данные (`0018_event_time_to_local`, `0029_notification_categories_by_event_group`),
+применяются вместе с выкаткой кода: короткое окно, когда API ещё на старых ключах категорий.
+
+### Резервные копии
+
+Данные лежат в именованных томах compose. Минимум — ежедневный дамп базы и копия медиа:
+
+```
+docker compose -f docker-compose.prod.yml exec -T postgres \
+  pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | gzip > /backup/hvostiki-$(date +%F).sql.gz
+docker run --rm -v hvostiki-backend_media:/data -v /backup:/backup alpine \
+  tar czf /backup/media-$(date +%F).tar.gz -C /data .
+```
+
+Дампы и архивы хранить вне сервера (S3-совместимое хранилище) — иначе смысла в них мало.
+Восстановление: `zcat dump.sql.gz | docker compose -f docker-compose.prod.yml exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"`.
+
+### Что стоит вынести в следующие итерации
+
+- объектное хранилище для медиа (`MEDIA_STORAGE_BACKEND=storages.backends.s3.S3Storage` + `django-storages`);
+- внешний мониторинг `/healthz` и сбор логов (сейчас логи контейнеров никуда не отправляются);
+- защита админки от перебора пароля (`django-axes`).

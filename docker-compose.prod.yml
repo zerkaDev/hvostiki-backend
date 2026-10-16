@@ -1,44 +1,113 @@
+# Прод-стек: nginx (HTTP/HTTPS, статика, медиа) → gunicorn + celery + postgres/redis/rabbitmq.
+#
+# Подготовка сервера:
+#   1. Скопировать .env.prod.example → .env и заполнить (DEBUG=0, SECRET_KEY, пароли, домен).
+#   2. Положить service account Firebase в secrets/firebase-key.json.
+#   3. docker compose -f docker-compose.prod.yml up -d --build
+#   4. Сертификат Let's Encrypt — README, раздел «HTTPS (Let's Encrypt)».
+#
+# Наружу открыты только 80/443. Postgres, Redis и RabbitMQ доступны лишь внутри сети compose.
 services:
+  nginx:
+    image: nginx:1.27-alpine
+    env_file:
+      - .env
+    # Шаблон конфига рендерится при старте: ${SERVER_NAME} подставляется из окружения.
+    volumes:
+      - ./nginx/conf.d/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/conf.d/proxy_params.conf:/etc/nginx/conf.d/proxy_params.conf:ro
+      - staticfiles:/app/staticfiles:ro
+      - media:/app/media:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: always
+
   web:
     build:
       context: .
       target: prod
+    command: ["web"]
     env_file:
       - .env
     volumes:
+      - staticfiles:/app/staticfiles
       - media:/app/media
       - private_media:/app/private_media
+      # Секрет монтируем, а не COPY в образ: ключ не должен попадать в слои.
+      - ./secrets/firebase-key.json:/app/firebase-key.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     depends_on:
-      - postgres
-      - redis
-      - rabbitmq
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     restart: always
 
   celery:
     build:
       context: .
       target: prod
-    command: celery -A config worker -l INFO
+    command: ["worker"]
     env_file:
       - .env
     volumes:
       - media:/app/media
       - private_media:/app/private_media
+      - ./secrets/firebase-key.json:/app/firebase-key.json:ro
+    # Миграции применяет web; воркер только ждёт БД.
+    environment:
+      RUN_MIGRATIONS: "0"
+      RUN_COLLECTSTATIC: "0"
     depends_on:
-      - redis
-      - rabbitmq
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      web:
+        condition: service_healthy
     restart: always
 
   celery-beat:
     build:
       context: .
       target: prod
-    command: celery -A config beat -l INFO
+    command: ["beat"]
     env_file:
       - .env
+    volumes:
+      # Расписание планировщика переживает перезапуск контейнера.
+      - celerybeat:/app/celerybeat
+    environment:
+      RUN_MIGRATIONS: "0"
+      RUN_COLLECTSTATIC: "0"
     depends_on:
-      - redis
-      - rabbitmq
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      web:
+        condition: service_healthy
     restart: always
 
   postgres:
@@ -47,17 +116,45 @@ services:
       - .env
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
     restart: always
 
   redis:
     image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     restart: always
 
   rabbitmq:
     image: rabbitmq:3
+    env_file:
+      - .env
+    volumes:
+      - rabbitmqdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
     restart: always
 
 volumes:
   pgdata:
   media:
   private_media:
+  staticfiles:
+  redisdata:
+  rabbitmqdata:
+  celerybeat:

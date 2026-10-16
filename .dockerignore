@@ -1,0 +1,26 @@
+# Всё, что не должно попадать в образ: секреты, локальные данные, окружение разработчика.
+# Без этого файла COPY . . затягивает в образ .env, firebase-key.json и .git.
+
+# Секреты и локальная конфигурация
+.env
+.env.*
+!.env.prod.example
+firebase-key.json
+celerybeat-schedule
+celerybeat.pid
+
+# Git и IDE
+.git
+.gitignore
+.idea
+.vscode
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Локальные данные и артефакты
+media/
+private_media/
+staticfiles/
+*.sqlite3
+*.log

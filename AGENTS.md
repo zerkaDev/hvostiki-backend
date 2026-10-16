@@ -24,6 +24,34 @@ Backend приложения для учёта питомцев («Хвости�
 
 Полезное: `make help`, `make logs`, `make shell`, `make test args="-k auth"`, `make su`.
 
+## Прод-сборка и деплой
+
+Файлы прод-пути: `docker-compose.prod.yml` (nginx + web + celery + celery-beat + postgres/redis/rabbitmq,
+наружу только 80/443), `Dockerfile` (стейджи `base`/`dev`/`prod-build`/`prod`), `entrypoint.sh`,
+`nginx/conf.d/*`, `.env.prod.example`, `.dockerignore`. Подробная инструкция — README, раздел «Прод: деплой».
+
+- **Prod-образ ставит зависимости в `/opt/venv`** через промежуточный стейдж `prod-build`: компиляторы
+  (psycopg2 собирается из исходников) и poetry в финальный образ не попадают. По этой же причине
+  `pytest`/`django-debug-toolbar`/`flower` живут в poetry-группе `dev`, а не в `[project.optional-dependencies]`;
+  в проде — `poetry install --only main`.
+- **Миграции и `collectstatic` — не в `docker build`**, а в `entrypoint.sh` при старте: на сборке нет `.env`
+  (падало на пустом `SECRET_KEY`), а миграции должны применяться к живой БД. Режимы entrypoint: `web`,
+  `worker`, `beat`, `manage <команда>` (например, `... exec web manage createsuperuser`).
+- **Процессы не работают от root**: entrypoint делает `chown` томов и запускает gunicorn/celery через
+  `setpriv --reuid=app` (uid 10001).
+- **Секреты монтируются**: `./secrets/firebase-key.json` → `/app/firebase-key.json:ro`. В образ `.env`
+  и ключ не попадают — за это отвечает `.dockerignore`.
+- **`/healthz`** (в `config/urls.py`) — liveness-проба без БД и Redis: её дёргают healthcheck compose,
+  nginx и внешний мониторинг. При добавлении проверок зависимостей не переносить их в этот эндпоинт.
+- **Прод-настройки безопасности включаются при `DEBUG=0`** (`SECURE_SSL_REDIRECT`, secure-cookies, HSTS,
+  `SECURE_PROXY_SSL_HEADER` для `X-Forwarded-Proto` от nginx). `CSRF_TRUSTED_ORIGINS` — из env.
+  Адреса БД, кеша и брокера берутся из env (`POSTGRES_HOST`, `CACHE_URL`, `CELERY_BROKER_URL`),
+  в dev-стеке остаются прежние значения по умолчанию.
+- **nginx** раздаёт `/static/` и `/media/` из томов, проксирует остальное, ограничивает частоту
+  `/auth/send-code/` (10 r/m на IP — в дополнение к кулдауну на номер в приложении) и разрешает
+  тело запроса 16 МБ (скриншот 10 МБ + журнал 2 МБ). HTTPS включается раскомментированием блока в шаблоне
+  после выпуска сертификата Let's Encrypt.
+
 ## Карта кода
 
 ```
@@ -50,9 +78,9 @@ tracker/
   utils.py       generate_occurrences (тонкая обёртка над движком), shift_time_by_minutes, normalize_phone
   event_time.py  время события: UTC на проводе ↔ локальное в БД (time_to_stored / time_to_wire)
   backends.py    PhoneBackend (вход в Django Admin по телефону)
-  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_profile_avatar/test_account_deletion/test_feedback/test_notification_settings/test_devices/test_event_time/test_recurrence_* (vectors/api/slots)
+  tests/         pytest: conftest.py + test_auth/test_pets/test_events/test_notifications/test_profile/test_profile_avatar/test_account_deletion/test_feedback/test_notification_settings/test_devices/test_event_time/test_healthz/test_recurrence_* (vectors/api/slots)
   tests/data/recurrence_vectors.json  общие векторы повторений (те же, что в мобильном приложении)
-  migrations/    0001..0028
+  migrations/    0001..0029
 ```
 
 ## Соглашения проекта
