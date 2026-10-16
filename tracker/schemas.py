@@ -484,6 +484,46 @@ EVENT_VIEWSET_SCHEMAS = {
         ],
         tags=['events'],
     ),
+    'edit': extend_schema(
+        summary='Изменить вхождение или «эту дату и все следующие»',
+        description="""
+                Тело: `{scope: "one" | "future", date, time?, event: {…}}`; `time` (UTC) обязательно, если у
+                события несколько времён в день. Область «всё» — обычный `PATCH` события.
+
+                **`scope=one`** («только эта дата»): `event` принимает только `title`, `description`, `type`,
+                `time` (UTC); серия не меняется, правка хранится на вхождение. Любые другие поля — 400,
+                отменённое вхождение — 409. Ответ: `{event}` — вхождение в виде элемента `/period/`.
+
+                **`scope=future`**: если у даты есть более ранние вхождения, серия делится — старая
+                заканчивается накануне (`end_count` превращается в `end_date`), с `date` создаётся новое
+                событие из текущих полей серии и полей `event` (формат как при создании; без `recurrence`
+                правило переносится, `end_count` заменяется остатком). Отметки, отмены, правки и журнал
+                уведомлений с даты переезжают на новое событие, если дата есть в новом расписании и слот
+                сопоставим (по порядку при том же числе времён в день), иначе удаляются. Ответ:
+                `{event, created_event}`. С первой даты серии и для одиночного события — обычное обновление,
+                ответ `{event}`. Идентификатор вхождения после разделения меняется: клиент перезагружает окно.
+
+                Смена расписания (в т.ч. обычным `PATCH`) сбрасывает отмены и правки дат и слотов, которых в
+                новом расписании нет; остальные сохраняются.
+                """,
+        request=OpenApiTypes.OBJECT,
+        responses={
+            200: OpenApiResponse(response=OpenApiTypes.OBJECT, description='`{event, created_event?}`'),
+            400: OpenApiResponse(description='Неверные scope/date/time/event или поля формы'),
+            409: OpenApiResponse(description='scope=one для отменённого вхождения'),
+        },
+        examples=[
+            OpenApiExample(
+                name='Only this date', request_only=True,
+                value={'scope': 'one', 'date': '2026-10-08', 'event': {'title': 'Другое', 'time': '09:30'}},
+            ),
+            OpenApiExample(
+                name='This and following', request_only=True,
+                value={'scope': 'future', 'date': '2026-10-08', 'event': {'title': 'Новое', 'time': '10:00'}},
+            ),
+        ],
+        tags=['events'],
+    ),
     'series_stats': extend_schema(
         summary='Сводка по серии относительно даты',
         description="""

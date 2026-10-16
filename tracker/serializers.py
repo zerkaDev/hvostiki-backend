@@ -11,7 +11,8 @@ from tracker.recurrence import (
     END_TYPES, RuleError, check_end_against_start, derive_end_type, normalize_rule, normalize_times,
     parse_stored_times, recompute_until, rule_from_normalized,
 )
-from tracker.models import DevicePlatform, Feedback, Notification, NotificationSettings, User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion, EventCancellation
+from tracker.models import DevicePlatform, Feedback, Notification, NotificationSettings, User, Pet, Breed, RecurrenceRule, Event, RecurrenceFrequency, EventCompletion, EventCancellation, EventTypeChoices
+from .occurrence_edit import prune_state
 from .occurrence_state import slot_filter
 
 from .event_time import time_to_stored, time_to_wire
@@ -544,9 +545,19 @@ class EventSerializer(serializers.ModelSerializer):
         elif instance.recurrence:
             instance.recurrence.delete()
             instance.recurrence = None
-            
+
         instance.save()
+        # Расписание могло измениться: отмены и правки дат, которых больше нет, сбрасываем
+        prune_state(instance)
         return instance
+
+
+class OccurrenceFieldsSerializer(serializers.Serializer):
+    """Поля, которые можно изменить у одного вхождения (``edit`` со ``scope=one``); ``time`` — в UTC."""
+    title = serializers.CharField(max_length=255, required=False)
+    description = serializers.CharField(required=False, allow_blank=True)
+    type = serializers.ChoiceField(choices=EventTypeChoices.choices, required=False)
+    time = serializers.TimeField(required=False)
 
 
 class EventOccurrenceSerializer(serializers.Serializer):

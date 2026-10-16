@@ -28,18 +28,18 @@ from tracker.models import (
     User, Pet, Breed, PetType, Event, EventCompletion, EventCancellation, EventOccurrenceOverride,
     FCMDevice, Notification,
 )
-from tracker import occurrence_actions
+from tracker import occurrence_actions, occurrence_edit
 from tracker.occurrence_state import find, slot_filter
 from tracker.serializers import (
     PhoneNumberSerializer, VerifyCodeSerializer, UserSerializer, 
-    PetSerializer, PetCreateSerializer, BreedSerializer, EventSerializer,
+    PetSerializer, PetCreateSerializer, BreedSerializer, EventSerializer, OccurrenceFieldsSerializer,
     DeviceRegistrationSerializer, DeviceUnregistrationSerializer, DeleteAccountSerializer, FeedbackSerializer,
     NotificationSettingsSerializer, NotificationSerializer
 )
 from tracker.tasks import send_confirmation_code, deliver_feedback
 from tracker.services import account_deletion
-from tracker.recurrence import event_slots
-from tracker.event_time import time_to_stored
+from tracker.recurrence import event_slots, parse_stored_times
+from tracker.event_time import time_to_stored, time_to_wire
 from tracker.utils import generate_occurrences
 from tracker import schemas
 
@@ -661,8 +661,13 @@ class EventViewSet(viewsets.ModelViewSet):
 
     def _occurrence_response(self, event, day, slot):
         """Состояние вхождения после действия — в том же виде, что элемент ``/period/``."""
+        return Response(self._occurrence_data(event, day, slot))
+
+    def _occurrence_data(self, event, day, slot):
         event = self.get_queryset().get(pk=event.pk)
         slots = event_slots(event)
+        if len(slots) > 1 and slot not in slots:
+            slot = slots[0]  # слоты могли смениться при редактировании
         lookup_slot = slot if len(slots) > 1 else None
         override = (
             EventOccurrenceOverride.objects.filter(slot_filter(event, lookup_slot), event=event, occurrence_date=day)
@@ -680,7 +685,7 @@ class EventViewSet(viewsets.ModelViewSet):
         )
         data = dict(serializer.data)
         data['start_date'] = day.isoformat()
-        return Response(data)
+        return data
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
@@ -699,6 +704,106 @@ class EventViewSet(viewsets.ModelViewSet):
         except occurrence_actions.OccurrenceConflict as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_409_CONFLICT)
         return self._occurrence_response(event, day, slot)
+
+    @action(detail=True, methods=['post'])
+    def edit(self, request, pk=None):
+        """Изменить одно вхождение (`scope=one`) либо вхождение даты и все следующие (`scope=future`)"""
+        event = self.get_object()
+        scope = request.data.get('scope')
+        if scope not in ('one', 'future'):
+            return Response({'detail': 'scope должен быть one или future'}, status=400)
+        form = request.data.get('event')
+        if not isinstance(form, dict):
+            return Response({'detail': 'event is required'}, status=400)
+        day, slot, error = self._completion_target(request, event)
+        if error:
+            return error
+        if day not in generate_occurrences(event, day, day):
+            return Response({'detail': 'На эту дату у события нет вхождения'}, status=400)
+
+        with transaction.atomic():
+            event = Event.objects.select_for_update(of=('self',)).select_related('recurrence').get(pk=event.pk)
+            if scope == 'one':
+                return self._edit_one(event, day, slot, form)
+            return self._edit_future(event, day, slot, form)
+
+    def _edit_one(self, event, day, slot, form):
+        """Правка полей одного вхождения; серия не меняется."""
+        unknown = sorted(set(form) - set(OccurrenceFieldsSerializer().fields))
+        if unknown:
+            return Response(
+                {'detail': f'scope=one допускает только title, description, type, time (лишние: {", ".join(unknown)})'},
+                status=400,
+            )
+        fields = OccurrenceFieldsSerializer(data=form)
+        fields.is_valid(raise_exception=True)
+        values = dict(fields.validated_data)
+        if values.get('time') is not None:
+            values['time'] = time_to_stored(values['time'], event.timezone_offset).replace(second=0, microsecond=0)
+        if occurrence_actions.is_cancelled(event, day, slot):
+            return Response({'detail': 'Вхождение отменено: сначала верните его'}, status=status.HTTP_409_CONFLICT)
+        occurrence_edit.apply_override(event, day, slot, values)
+        return Response({'event': self._occurrence_data(event, day, slot)})
+
+    def _edit_future(self, event, day, slot, form):
+        """Изменение даты и всех следующих: с первой даты — обычное обновление, иначе разделение серии."""
+        context = self.get_serializer_context()
+        has_earlier = (
+            event.is_recurring and event.recurrence is not None and day > event.start_date
+            and bool(generate_occurrences(event, event.start_date, day - timedelta(days=1)))
+        )
+        if not has_earlier:
+            serializer = self.get_serializer_class()(event, data=form, partial=True, context=context)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response({'event': self._occurrence_data(event, day, slot)})
+
+        serializer = self.get_serializer_class()(data=self._split_payload(event, day, form), context=context)
+        serializer.is_valid(raise_exception=True)
+        new_event = serializer.save()
+        occurrence_edit.split_series(event, new_event, day)
+        new_event = self.get_queryset().get(pk=new_event.pk)
+        new_slots = event_slots(new_event)
+        return Response({
+            'event': self._occurrence_data(event, day - timedelta(days=1), None),
+            'created_event': self._occurrence_data(
+                new_event, new_event.start_date, new_slots[0] if len(new_slots) > 1 else None,
+            ),
+        })
+
+    @staticmethod
+    def _split_payload(event, day, form):
+        """Данные нового события: текущие поля серии с даты ``day``, поверх — поля формы.
+
+        Без ``recurrence`` в форме правило переносится как есть; ``end_count`` превращается в остаток
+        повторений (дни до ``day`` уже прошли в старой серии).
+        """
+        rule = event.recurrence
+        payload = {
+            'pet': event.pet_id,
+            'title': event.title,
+            'description': event.description,
+            'type': event.type,
+            'start_date': day.isoformat(),
+            'time': time_to_wire(event.time, event.timezone_offset).isoformat() if event.time else None,
+            'timezone_offset': event.timezone_offset,
+            'is_recurring': True,
+        }
+        if 'recurrence' not in form:
+            past_days = len(generate_occurrences(event, event.start_date, day - timedelta(days=1)))
+            payload['recurrence'] = {
+                'frequency': rule.frequency, 'interval': rule.interval, 'week_days': rule.week_days,
+                'month_days': rule.month_days, 'year_dates': rule.year_dates,
+                'times': [
+                    time_to_wire(t, event.timezone_offset).strftime('%H:%M') for t in parse_stored_times(rule.times)
+                ] or None,
+                'end_date': rule.end_date,
+                'end_count': max(rule.end_count - past_days, 1) if rule.end_count else None,
+            }
+        payload.update(form)
+        if payload.get('is_recurring') is False and 'recurrence' not in form:
+            payload.pop('recurrence', None)
+        return payload
 
     @action(detail=True, methods=['get'])
     def series_stats(self, request, pk=None):
