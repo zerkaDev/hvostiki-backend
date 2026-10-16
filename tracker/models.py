@@ -381,6 +381,72 @@ class EventCompletion(models.Model):
         ]
 
 
+class EventCancellation(models.Model):
+    """Отмена конкретного вхождения: дата и, при нескольких временах в день, слот.
+
+    Вхождение остаётся в календаре и истории с пометкой «Отменено» (в ``/period/`` отдаётся
+    ``cancelled=true``), но пушей по нему нет, а в ``/pets/{id}/upcoming/`` его не видно. Возврат —
+    удаление строки. Одиночное событие отменяется так же: строкой на его ``start_date``.
+    ``occurrence_time`` — локальное время слота (как ``Event.time``); NULL — одно время / весь день,
+    в многослотовом режиме NULL относится к первому слоту (как у :class:`EventCompletion`).
+    """
+    event = models.ForeignKey('Event', on_delete=models.CASCADE, related_name='cancellations')
+    occurrence_date = models.DateField()
+    occurrence_time = models.TimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Отмена вхождения'
+        verbose_name_plural = 'Отмены вхождений'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['event', 'occurrence_date', 'occurrence_time'],
+                nulls_distinct=False,
+                name='uniq_cancellation_slot',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.event_id} {self.occurrence_date}'
+
+
+class EventOccurrenceOverride(models.Model):
+    """Правка одного вхождения серии («Изменить только эту дату»).
+
+    Поля, не равные ``NULL``, подменяют соответствующие поля события в выдаче и в уведомлениях;
+    остальное берётся из события. Вхождение определяют исходные ``occurrence_date`` и
+    ``occurrence_time`` (слот до правки, локальное время): по ним же ищутся отметки выполнения и
+    отмены. ``time`` — новое локальное время вхождения. Менять дату, питомца и правило повторения
+    через переопределение нельзя.
+    """
+    event = models.ForeignKey('Event', on_delete=models.CASCADE, related_name='overrides')
+    occurrence_date = models.DateField()
+    occurrence_time = models.TimeField(null=True, blank=True)
+
+    title = models.CharField(max_length=255, null=True, blank=True)
+    description = models.TextField(null=True, blank=True)
+    type = models.CharField(
+        max_length=32, choices=EventTypeChoices.choices, null=True, blank=True,
+    )
+    time = models.TimeField(null=True, blank=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Правка вхождения'
+        verbose_name_plural = 'Правки вхождений'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['event', 'occurrence_date', 'occurrence_time'],
+                nulls_distinct=False,
+                name='uniq_override_slot',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.event_id} {self.occurrence_date}'
+
+
 class DevicePlatform(models.TextChoices):
     IOS = 'ios', 'iOS'
     ANDROID = 'android', 'Android'

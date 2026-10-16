@@ -7,7 +7,8 @@ from django.urls import path, reverse
 from django.utils.html import format_html
 from tracker.models import (
     User, Breed, Pet, RecurrenceRule, Event,
-    EventNotificationLog, EventCompletion, Feedback, Notification, FCMDevice
+    EventNotificationLog, EventCompletion, EventCancellation, EventOccurrenceOverride,
+    Feedback, Notification, FCMDevice
 )
 from tracker.services import feedback_logs
 
@@ -58,6 +59,20 @@ class EventNotificationLogAdmin(admin.ModelAdmin):
 class EventCompletionAdmin(admin.ModelAdmin):
     list_display = ('event', 'occurrence_date', 'done_at')
     list_filter = ('occurrence_date', 'done_at')
+
+
+@admin.register(EventCancellation)
+class EventCancellationAdmin(admin.ModelAdmin):
+    list_display = ('event', 'occurrence_date', 'occurrence_time', 'cancelled_at')
+    list_filter = ('occurrence_date', 'cancelled_at')
+    raw_id_fields = ('event',)
+
+
+@admin.register(EventOccurrenceOverride)
+class EventOccurrenceOverrideAdmin(admin.ModelAdmin):
+    list_display = ('event', 'occurrence_date', 'occurrence_time', 'title', 'time', 'type', 'updated_at')
+    list_filter = ('occurrence_date', 'type')
+    raw_id_fields = ('event',)
 
 
 @admin.register(Feedback)
