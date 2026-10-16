@@ -44,7 +44,7 @@ class RecurrenceRuleAdmin(admin.ModelAdmin):
 
 @admin.register(Event)
 class EventAdmin(admin.ModelAdmin):
-    list_display = ('title', 'user', 'pet', 'start_date', 'time', 'is_recurring', 'type', 'done')
+    list_display = ('title', 'user', 'pet', 'start_date', 'time', 'is_recurring', 'type', 'reminders', 'done')
     list_filter = ('type', 'is_recurring', 'done', 'start_date')
     search_fields = ('title', 'user__phone_number', 'pet__name')
 
@@ -70,7 +70,7 @@ class EventCancellationAdmin(admin.ModelAdmin):
 
 @admin.register(EventOccurrenceOverride)
 class EventOccurrenceOverrideAdmin(admin.ModelAdmin):
-    list_display = ('event', 'occurrence_date', 'occurrence_time', 'title', 'time', 'type', 'updated_at')
+    list_display = ('event', 'occurrence_date', 'occurrence_time', 'title', 'time', 'type', 'reminders', 'updated_at')
     list_filter = ('occurrence_date', 'type')
     raw_id_fields = ('event',)
 

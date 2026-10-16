@@ -40,6 +40,7 @@ from tracker.tasks import send_confirmation_code, deliver_feedback
 from tracker.services import account_deletion
 from tracker.recurrence import event_slots, parse_stored_times
 from tracker.event_time import time_to_stored, time_to_wire
+from tracker.reminders import ReminderError, validate_reminders
 from tracker.utils import generate_occurrences
 from tracker import schemas
 
@@ -732,7 +733,10 @@ class EventViewSet(viewsets.ModelViewSet):
         unknown = sorted(set(form) - set(OccurrenceFieldsSerializer().fields))
         if unknown:
             return Response(
-                {'detail': f'scope=one допускает только title, description, type, time (лишние: {", ".join(unknown)})'},
+                {
+                    'detail': 'scope=one допускает только title, description, type, time, reminders '
+                              f'(лишние: {", ".join(unknown)})',
+                },
                 status=400,
             )
         fields = OccurrenceFieldsSerializer(data=form)
@@ -740,6 +744,10 @@ class EventViewSet(viewsets.ModelViewSet):
         values = dict(fields.validated_data)
         if values.get('time') is not None:
             values['time'] = time_to_stored(values['time'], event.timezone_offset).replace(second=0, microsecond=0)
+        try:
+            validate_reminders(values.get('reminders'), all_day=event.time is None)
+        except ReminderError as exc:
+            return Response({'detail': str(exc)}, status=400)
         if occurrence_actions.is_cancelled(event, day, slot):
             return Response({'detail': 'Вхождение отменено: сначала верните его'}, status=status.HTTP_409_CONFLICT)
         occurrence_edit.apply_override(event, day, slot, values)
@@ -784,6 +792,7 @@ class EventViewSet(viewsets.ModelViewSet):
             'title': event.title,
             'description': event.description,
             'type': event.type,
+            'reminders': event.reminders,
             'start_date': day.isoformat(),
             'time': time_to_wire(event.time, event.timezone_offset).isoformat() if event.time else None,
             'timezone_offset': event.timezone_offset,
