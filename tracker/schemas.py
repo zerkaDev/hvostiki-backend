@@ -454,6 +454,47 @@ EVENT_VIEWSET_SCHEMAS = {
             )
         },
     ),
+    'cancel': extend_schema(
+        summary='Отменить вхождение события',
+        description="""
+                Отменяет конкретное вхождение (`scope=one`, по умолчанию) либо вхождение даты `date` и все
+                следующие (`scope=future`): серия заканчивается этой датой (`end_count` превращается в
+                `end_date`), отметки, отмены и правки после даты удаляются. У одиночного события `future`
+                равно `one`.
+
+                - `date` обязательна и должна быть датой вхождения (иначе 400)
+                - `time` (UTC) обязательно, если у события несколько времён в день; при `future` отменяются
+                  все слоты дня `date`, кроме уже выполненных
+                - Повторный вызов безопасен (idempotent)
+                - Вхождение уже выполнено — 409
+                - Ответ — вхождение в том же виде, что элемент `/event_schedule/period/` (с `cancelled`)
+                """,
+        request=OpenApiTypes.OBJECT,
+        responses={
+            200: EventSerializer,
+            400: OpenApiResponse(description='Нет даты, неверный scope/time или на дату нет вхождения'),
+            409: OpenApiResponse(description='Вхождение уже выполнено'),
+        },
+        examples=[
+            OpenApiExample(name='Cancel one', request_only=True, value={'date': '2026-10-06', 'scope': 'one'}),
+            OpenApiExample(
+                name='Cancel this and following', request_only=True,
+                value={'date': '2026-10-06', 'time': '11:00', 'scope': 'future'},
+            ),
+        ],
+        tags=['events'],
+    ),
+    'restore': extend_schema(
+        summary='Вернуть отменённое вхождение',
+        description="""
+                Снимает отмену вхождения (идемпотентно). Серию, остановленную через `cancel` со
+                `scope=future`, это не удлиняет. `time` (UTC) — как у `cancel`.
+                """,
+        request=OpenApiTypes.OBJECT,
+        responses={200: EventSerializer, 400: OpenApiResponse(description='Нет даты или неверный time')},
+        examples=[OpenApiExample(name='Restore', request_only=True, value={'date': '2026-10-06'})],
+        tags=['events'],
+    ),
     'mark_done': extend_schema(
         summary='Отметить событие выполненным',
         description="""
@@ -464,7 +505,9 @@ EVENT_VIEWSET_SCHEMAS = {
                 - Для повторяющегося — дату конкретного occurrence
                 - Повторный вызов безопасен (idempotent)
                 - Если у события несколько времён в день (`recurrence.times`), обязательно передайте `time`
-                  (в UTC, как `time` события); без него или с несуществующим слотом — 400
+                  (в UTC, как `time` события); без него или с несуществующим слотом — 400.
+                  Подходит и время, на которое вхождение сдвинуто правкой этой даты
+                - Вхождение отменено — 409 (сначала `restore`)
                 """,
         request=OpenApiTypes.OBJECT,
         responses={
@@ -473,6 +516,7 @@ EVENT_VIEWSET_SCHEMAS = {
                 description='Событие успешно отмечено выполненным',
                 examples=[OpenApiExample(name='Success', value={'done': True})],
             ),
+            409: OpenApiResponse(description='Вхождение отменено'),
         },
         examples=[
             OpenApiExample(name='Mark occurrence done', request_only=True, value={'date': '2026-02-20'}),

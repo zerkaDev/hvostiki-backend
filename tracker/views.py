@@ -28,7 +28,8 @@ from tracker.models import (
     User, Pet, Breed, PetType, Event, EventCompletion, EventCancellation, EventOccurrenceOverride,
     FCMDevice, Notification,
 )
-from tracker.occurrence_state import find
+from tracker import occurrence_actions
+from tracker.occurrence_state import find, slot_filter
 from tracker.serializers import (
     PhoneNumberSerializer, VerifyCodeSerializer, UserSerializer, 
     PetSerializer, PetCreateSerializer, BreedSerializer, EventSerializer,
@@ -635,7 +636,13 @@ class EventViewSet(viewsets.ModelViewSet):
             return None, None, Response({'detail': 'time has invalid format'}, status=400)
         slot = time_to_stored(parsed, event.timezone_offset).replace(second=0, microsecond=0)
         if slot not in slots:
-            return None, None, Response({'detail': 'time does not match any slot of the event'}, status=400)
+            # Время правки этой даты («изменить только эту дату») тоже опознаёт вхождение
+            edited = EventOccurrenceOverride.objects.filter(
+                event=event, occurrence_date=occurrence_date, time=slot,
+            ).first()
+            if edited is None:
+                return None, None, Response({'detail': 'time does not match any slot of the event'}, status=400)
+            slot = edited.occurrence_time if edited.occurrence_time in slots else slots[0]
         return occurrence_date, slot, None
 
     @action(detail=True, methods=['post'])
@@ -646,8 +653,62 @@ class EventViewSet(viewsets.ModelViewSet):
         if error:
             return error
 
+        if occurrence_actions.is_cancelled(event, occurrence_date, slot):
+            return Response({'detail': 'Вхождение отменено: сначала верните его'}, status=status.HTTP_409_CONFLICT)
+
         EventCompletion.objects.get_or_create(event=event, occurrence_date=occurrence_date, occurrence_time=slot)
         return Response({'done': True})
+
+    def _occurrence_response(self, event, day, slot):
+        """Состояние вхождения после действия — в том же виде, что элемент ``/period/``."""
+        event = self.get_queryset().get(pk=event.pk)
+        slots = event_slots(event)
+        lookup_slot = slot if len(slots) > 1 else None
+        override = (
+            EventOccurrenceOverride.objects.filter(slot_filter(event, lookup_slot), event=event, occurrence_date=day)
+            .first()
+        )
+        serializer = self.get_serializer_class()(
+            event,
+            context={
+                **self.get_serializer_context(),
+                'occurrence_date': day,
+                'slot_time': slot if slot is not None else event.time,
+                'occurrence_time': lookup_slot,
+                'override': override,
+            },
+        )
+        data = dict(serializer.data)
+        data['start_date'] = day.isoformat()
+        return Response(data)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Отменить вхождение (`scope=one`) или вхождения даты и всех следующих (`scope=future`)"""
+        event = self.get_object()
+        scope = request.data.get('scope', 'one')
+        if scope not in ('one', 'future'):
+            return Response({'detail': 'scope должен быть one или future'}, status=400)
+        day, slot, error = self._completion_target(request, event)
+        if error:
+            return error
+        if day not in generate_occurrences(event, day, day):
+            return Response({'detail': 'На эту дату у события нет вхождения'}, status=400)
+        try:
+            occurrence_actions.cancel_occurrence(event, day, slot, scope)
+        except occurrence_actions.OccurrenceConflict as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_409_CONFLICT)
+        return self._occurrence_response(event, day, slot)
+
+    @action(detail=True, methods=['post'])
+    def restore(self, request, pk=None):
+        """Вернуть отменённое вхождение"""
+        event = self.get_object()
+        day, slot, error = self._completion_target(request, event)
+        if error:
+            return error
+        occurrence_actions.restore_occurrence(event, day, slot)
+        return self._occurrence_response(event, day, slot)
 
     @action(detail=True, methods=['post'])
     def mark_undone(self, request, pk=None):
