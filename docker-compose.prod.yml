@@ -114,6 +114,18 @@ services:
     image: postgres:16
     env_file:
       - .env
+    # Настройки под небольшой сервер (2-4 ГБ): дефолтные shared_buffers рассчитаны
+    # на выделенную машину и забирают память у остальных контейнеров.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=50
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -126,7 +138,16 @@ services:
 
   redis:
     image: redis:7
-    command: ["redis-server", "--appendonly", "yes"]
+    # appendonly — кеш и рейт-лимиты переживают перезапуск; maxmemory — чтобы кеш
+    # не вытеснил остальные контейнеры на маленьком сервере.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 192mb
+      - --maxmemory-policy
+      - allkeys-lru
     volumes:
       - redisdata:/data
     healthcheck:

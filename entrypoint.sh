@@ -9,6 +9,8 @@ RUN_MIGRATIONS="${RUN_MIGRATIONS:-1}"
 RUN_COLLECTSTATIC="${RUN_COLLECTSTATIC:-1}"
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-3}"
 GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-60}"
+# На 1 vCPU пул prefork по умолчанию (число ядер + 1) даёт лишние процессы и память.
+CELERY_CONCURRENCY="${CELERY_CONCURRENCY:-2}"
 APP_USER="${APP_USER:-app}"
 
 log() {
@@ -82,12 +84,16 @@ case "$1" in
             --error-logfile -
         ;;
     worker)
-        log "Запускаем celery worker"
-        run_as_app celery -A config worker -l INFO
+        log "Запускаем celery worker (concurrency=$CELERY_CONCURRENCY)"
+        run_as_app celery -A config worker -l INFO --concurrency "$CELERY_CONCURRENCY"
         ;;
     beat)
         log "Запускаем celery beat"
-        run_as_app celery -A config beat -l INFO
+        # Файл расписания — в томе /app/celerybeat: рабочий каталог /app принадлежит root,
+        # и без явного пути beat падает с PermissionError.
+        run_as_app celery -A config beat -l INFO \
+            --schedule /app/celerybeat/celerybeat-schedule \
+            --pidfile /app/celerybeat/celerybeat.pid
         ;;
     manage)
         shift

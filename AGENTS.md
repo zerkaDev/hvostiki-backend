@@ -38,7 +38,13 @@ Backend приложения для учёта питомцев («Хвости�
   (падало на пустом `SECRET_KEY`), а миграции должны применяться к живой БД. Режимы entrypoint: `web`,
   `worker`, `beat`, `manage <команда>` (например, `... exec web manage createsuperuser`).
 - **Процессы не работают от root**: entrypoint делает `chown` томов и запускает gunicorn/celery через
-  `setpriv --reuid=app` (uid 10001).
+  `setpriv --reuid=app` (uid 10001). Из-за этого `celery beat` запускается с явными
+  `--schedule /app/celerybeat/...` и `--pidfile`: рабочий каталог `/app` принадлежит root, и без этих
+  флагов beat падает в рестарт-луп с `PermissionError: celerybeat-schedule`.
+- **Настройки под маленький сервер**: `CELERY_CONCURRENCY` (по умолчанию 2 — пул prefork на 1 vCPU
+  съедает больше памяти, чем все остальные контейнеры), `GUNICORN_WORKERS` (3), Postgres
+  (`shared_buffers=128MB`, `max_connections=50`) и Redis (`maxmemory=192mb`, `allkeys-lru`) заданы
+  в compose под 2 ГБ RAM. Замеры и ориентиры по ресурсам — README, «Сколько ресурсов нужно».
 - **Секреты монтируются**: `./secrets/firebase-key.json` → `/app/firebase-key.json:ro`. В образ `.env`
   и ключ не попадают — за это отвечает `.dockerignore`.
 - **`/healthz`** (в `config/urls.py`) — liveness-проба без БД и Redis: её дёргают healthcheck compose,
