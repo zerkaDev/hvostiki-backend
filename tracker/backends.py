@@ -3,6 +3,8 @@ from django.contrib.auth.backends import BaseBackend
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 
+from tracker.utils import normalize_phone
+
 User = get_user_model()
 
 
@@ -15,9 +17,17 @@ class PhoneBackend(BaseBackend):
         if not username:
             return None
 
+        # В админку номер можно ввести по-разному: 79999999999, +79999999999,
+        # 89999999999. В БД он хранится каноническим (11 цифр с 7), поэтому
+        # проверяем и исходную строку, и нормализованный вариант.
+        normalized = normalize_phone(username)
+        phones = {username}
+        if normalized:
+            phones.add(normalized)
+
         # Собираем условия явно: у модели нет ни username, ни email,
         # но если появятся — поиск будет учитывать и их.
-        query = Q(phone_number=username)
+        query = Q(phone_number__in=phones)
         if hasattr(User, 'username'):
             query |= Q(username=username)
         if hasattr(User, 'email'):

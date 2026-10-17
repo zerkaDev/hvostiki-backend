@@ -1,4 +1,5 @@
 import pytest
+from django.contrib.auth import authenticate
 from django.urls import reverse
 from unittest.mock import patch
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
@@ -270,3 +271,29 @@ class TestAuth:
         )
 
         assert response.status_code == 401
+
+
+@pytest.mark.django_db
+class TestAdminPhoneLogin:
+    """Вход в админку по номеру телефона: формат ввода не должен иметь значения."""
+
+    def _staff(self):
+        user = User.objects.create_user(phone_number='79999999999', password='admin-pass-123')
+        user.is_staff = True
+        user.is_superuser = True
+        user.save(update_fields=['is_staff', 'is_superuser'])
+        return user
+
+    @pytest.mark.parametrize('login', ['79999999999', '+79999999999', '89999999999', '+7 (999) 999-99-99'])
+    def test_accepts_any_phone_format(self, login):
+        user = self._staff()
+
+        assert authenticate(username=login, password='admin-pass-123') == user
+
+    def test_wrong_password_rejected(self):
+        self._staff()
+
+        assert authenticate(username='79999999999', password='nope') is None
+
+    def test_unknown_phone_rejected(self):
+        assert authenticate(username='+79000000000', password='admin-pass-123') is None
