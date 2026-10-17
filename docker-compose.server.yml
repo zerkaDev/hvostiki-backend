@@ -1,0 +1,13 @@
+# Оверрайд для сервера: образ уже собран и загружен (docs/README, раздел «Прод: деплой»),
+# поэтому вместо сборки на месте compose использует готовый тег.
+# Сборка на самом сервере не нужна: у него 1 ядро и 10 ГБ диска.
+services:
+  web:
+    build: !reset null
+    image: hvostiki-prod-amd64:latest
+  celery:
+    build: !reset null
+    image: hvostiki-prod-amd64:latest
+  celery-beat:
+    build: !reset null
+    image: hvostiki-prod-amd64:latest

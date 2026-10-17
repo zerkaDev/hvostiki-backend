@@ -71,6 +71,9 @@ services:
       context: .
       target: prod
     command: ["worker"]
+    # HEALTHCHECK образа проверяет порт 8000, которого у воркера нет: healthcheck не нужен.
+    healthcheck:
+      disable: true
     env_file:
       - .env
     volumes:
@@ -97,6 +100,8 @@ services:
       context: .
       target: prod
     command: ["beat"]
+    healthcheck:
+      disable: true
     env_file:
       - .env
     volumes:
