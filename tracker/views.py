@@ -4,7 +4,7 @@ import random
 import logging
 import uuid
 from collections import defaultdict
-from datetime import timedelta
+from datetime import timedelta, timezone as dt_timezone
 import jwt
 from django.conf import settings
 from django.db import transaction
@@ -110,6 +110,10 @@ def group_occurrences(events, date_from, date_to, serializer_class, serializer_c
         slots = event_slots(event)
         multi_slot = len(slots) > 1
         occurrence_days = generate_occurrences(event, date_from, date_to)
+        # Событие сериализуем один раз: DRF строит поля и прогоняет to_representation
+        # на каждое вхождение, а в окне их сотни (на 744 вхождения — ~2.4 с из 3 с).
+        # От вхождения зависят только start_date/time/done/cancelled/done_at и правки.
+        base_rep = _event_base_representation(event, serializer_class, base_context)
         for slot in slots:
             # Порядок внутри дня — по моменту события: локальное время минус offset, в секундах.
             # Не по строке time из ответа: в режиме utc оно сдвинуто на offset и «заворачивается»
@@ -135,27 +139,54 @@ def group_occurrences(events, date_from, date_to, serializer_class, serializer_c
                         date_from, date_to, MAX_OCCURRENCES_PER_RESPONSE,
                     )
                     raise OccurrenceLimitError
-                serializer = serializer_class(
-                    event,
-                    context={
-                        **base_context,
-                        'occurrence_date': occurrence,
-                        'slot_time': slot,
-                        'occurrence_time': slot if multi_slot else None,
-                        'is_cancelled': is_cancelled,
-                        'done_at': find(completions, event, occurrence, lookup_slot),
-                        'override': override,
-                    },
+                data = _occurrence_data(
+                    base_rep, event, occurrence, slot,
+                    multi_slot=multi_slot,
+                    is_cancelled=is_cancelled,
+                    done_at=find(completions, event, occurrence, lookup_slot),
+                    override=override,
                 )
-                data = dict(serializer.data)
-                # Дата конкретного вхождения, а не start_date события
-                data['start_date'] = occurrence.isoformat()
                 grouped[data['start_date']].append((sort_key, data))
 
     for items in grouped.values():
         items.sort(key=lambda item: item[0])
 
     return {date_key: [data for _, data in grouped[date_key]] for date_key in sorted(grouped)}
+
+
+def _event_base_representation(event, serializer_class, context):
+    """Один проход сериализатора на событие: отсюда берём все поля, не зависящие от даты."""
+    serializer = serializer_class(event, context={**context, 'include_pet_obj': False})
+    return dict(serializer.data)
+
+
+def _occurrence_data(base_rep, event, occurrence, slot, *, multi_slot, is_cancelled, done_at, override):
+    """Копия сериализованного события с полями конкретного вхождения.
+
+    Повторяет ровно то, что ``EventSerializer.to_representation`` делает для вхождения:
+    подмена полей правкой даты, время слота в UTC, дата вхождения вместо ``start_date``.
+    """
+    data = dict(base_rep)
+    data['start_date'] = occurrence.isoformat()
+
+    if override is not None:
+        for field in ('title', 'description', 'type'):
+            value = getattr(override, field)
+            if value is not None:
+                data[field] = value
+        if override.reminders is not None:
+            data['reminders'] = override.reminders
+
+    shown_time = override.time if override is not None and override.time is not None else slot
+    if shown_time is not None:
+        data['time'] = time_to_wire(shown_time, event.timezone_offset).isoformat()
+
+    data['cancelled'] = bool(is_cancelled)
+    data['done'] = bool(done_at)
+    data['done_at'] = (
+        done_at.astimezone(dt_timezone.utc).isoformat().replace('+00:00', 'Z') if done_at else None
+    )
+    return data
 
 
 def _limit_error_response():

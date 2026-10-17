@@ -159,6 +159,30 @@ class TestPeriodLimits:
         r = auth_client.get(self.PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-10-07'})
         assert [r.data[d][0]['done'] for d in sorted(r.data)] == [False, True, False]
 
+    def test_serializer_not_built_per_occurrence(self, auth_client, pet, monkeypatch):
+        """Сериализатор строится раз на событие, а не на каждое вхождение.
+
+        Раньше /period/ создавал EventSerializer на каждое вхождение: на 744 вхождения
+        в окне это давало больше секунды CPU (DRF пересобирает поля в get_fields).
+        """
+        from tracker.views import EventSerializer
+
+        calls = []
+        original_init = EventSerializer.__init__
+
+        def counting_init(self, *args, **kwargs):
+            calls.append(1)
+            original_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(EventSerializer, '__init__', counting_init)
+        assert _post(auth_client, pet, {'frequency': 'daily'}).status_code == 201
+
+        r = auth_client.get(self.PERIOD, {'date_from': '2026-10-05', 'date_to': '2026-11-05'})
+
+        occurrences = sum(len(v) for v in r.data.values())
+        assert occurrences > 20
+        assert len(calls) <= 3, f'сериализатор построен {len(calls)} раз на {occurrences} вхождений'
+
     def test_expired_rule_excluded(self, auth_client, pet):
         _post(auth_client, pet, {'frequency': 'daily', 'end_date': '2026-10-08'})
         r = auth_client.get(self.PERIOD, {'date_from': '2026-10-09', 'date_to': '2026-10-20'})
