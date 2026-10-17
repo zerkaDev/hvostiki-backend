@@ -29,7 +29,9 @@ services:
       - "0.0.0.0:443:443"
       - "[::]:443:443"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      # HTTPS + --no-check-certificate: локальная проверка идёт на 127.0.0.1, а сертификат
+      # выписан на домен; http-порт теперь отвечает редиректом и для проверки не годится.
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
