@@ -1,0 +1,102 @@
+# nginx с HTTPS. Копируется поверх default.conf.template после выпуска сертификата
+# (см. scripts/enable_https.sh): до этого nginx не сможет стартовать, потому что
+# ssl_certificate ссылается на ещё не существующие файлы.
+
+upstream hvostiki_web {
+    server web:8000;
+    keepalive 16;
+}
+
+# Ограничение частоты на чувствительные ручки: код подтверждения жжёт платные звонки uCaller.
+limit_req_zone $binary_remote_addr zone=auth_code:10m rate=10r/m;
+
+# HTTP: только ACME-челлендж и редирект на HTTPS.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${SERVER_NAME};
+
+    access_log /var/log/nginx/access.log main_ext;
+    error_log /var/log/nginx/error.log warn;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# HTTPS: основной трафик.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${SERVER_NAME};
+
+    ssl_certificate     /etc/letsencrypt/live/${SERVER_NAME}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${SERVER_NAME}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    add_header Strict-Transport-Security "max-age=2592000" always;
+
+    # Скриншот (10 МБ) + журнал (2 МБ) + запас на multipart.
+    client_max_body_size 16m;
+
+    # Сжатие: /period/ отдаёт сотни килобайт JSON, без gzip это главный вклад
+    # в «медленно грузит» на мобильной сети.
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_vary on;
+    gzip_types application/json application/javascript text/css text/plain
+               text/xml application/xml image/svg+xml;
+
+    # Формат main_ext (см. 0-log_format.conf) — с rt/urt/gz для поиска тормозов.
+    access_log /var/log/nginx/access.log main_ext;
+    error_log /var/log/nginx/error.log warn;
+
+    # Healthcheck: без access-логов, чтобы не засорять журнал.
+    location = /healthz {
+        access_log off;
+        proxy_pass http://hvostiki_web;
+        # Без X-Forwarded-Proto Django считает запрос http и с SECURE_SSL_REDIRECT=1
+        # отвечает 301 на тот же адрес — healthcheck никогда не увидел бы 200.
+        include /etc/nginx/conf.d/proxy_params.conf;
+    }
+
+    # Отправка кода подтверждения — жёсткий лимит по IP (в приложении есть кулдаун на номер).
+    location = /auth/send-code/ {
+        limit_req zone=auth_code burst=5 nodelay;
+        limit_req_status 429;
+        proxy_pass http://hvostiki_web;
+        include /etc/nginx/conf.d/proxy_params.conf;
+    }
+
+    # Статика Django (collectstatic кладёт её в общий том).
+    location /static/ {
+        alias /app/staticfiles/;
+        access_log off;
+        expires 30d;
+        add_header Cache-Control "public";
+    }
+
+    # Медиа пользователей: аватары, фото питомцев, скриншоты обращений.
+    # Журналы приложения здесь не лежат — они в приватном хранилище (private_media).
+    location /media/ {
+        alias /app/media/;
+        access_log off;
+        expires 7d;
+        add_header Cache-Control "public";
+    }
+
+    location / {
+        proxy_pass http://hvostiki_web;
+        include /etc/nginx/conf.d/proxy_params.conf;
+    }
+}

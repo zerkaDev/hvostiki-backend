@@ -104,12 +104,15 @@ docker compose -f docker-compose.prod.yml --profile tools run --rm certbot certo
   --email you@example.com --agree-tos --no-eff-email
 ```
 
-Далее раскомментировать блок `# --- HTTPS ---` в шаблоне (там `SERVER_NAME` подставится в пути
-к сертификату) и перезапустить nginx:
+Далее включить HTTPS готовым скриптом (он подставляет конфиг с 443 и редиректом, переключает
+`SECURE_SSL_REDIRECT`/`COOKIE_SECURE` и сам проверяет результат):
 
 ```
-docker compose -f docker-compose.prod.yml restart nginx
+sh scripts/enable_https.sh
 ```
+
+Скрипт копирует `nginx/conf.d/default-https.conf.template` поверх `default.conf.template` —
+до выпуска сертификата этого делать нельзя, nginx не стартует без файлов ключа.
 
 Продление — по крону сервера (сертификат живёт 90 дней):
 ```
