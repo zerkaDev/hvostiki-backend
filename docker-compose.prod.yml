@@ -20,10 +20,12 @@ services:
       - media:/app/media:ro
       - ./certbot/conf:/etc/letsencrypt:ro
       - ./certbot/www:/var/www/certbot
+    # Явно по семьям адресов: короткая запись "80:80" в Docker биндится сразу на IPv4 и IPv6,
+    # и вместе с "[::]:80:80" даёт конфликт «address already in use».
     ports:
-      - "80:80"
+      - "0.0.0.0:80:80"
       - "[::]:80:80"
-      - "443:443"
+      - "0.0.0.0:443:443"
       - "[::]:443:443"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
@@ -165,6 +167,8 @@ services:
       - .env
     volumes:
       - rabbitmqdata:/var/lib/rabbitmq
+      # Порог памяти под маленький сервер: дефолтные 60% на 2 ГБ блокируют публикацию.
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 15s
