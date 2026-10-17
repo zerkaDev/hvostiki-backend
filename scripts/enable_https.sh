@@ -30,7 +30,10 @@ echo "1/4 Конфиг nginx: HTTPS для $DOMAIN"
 cp nginx/conf.d/default-https.conf.template nginx/conf.d/default.conf.template
 
 echo "2/4 Переключаем флаги безопасности в .env"
-sed -i 's/^SECURE_SSL_REDIRECT=.*/SECURE_SSL_REDIRECT=1/' .env
+# Редирект http→https делает nginx (return 301). Django-флаг SECURE_SSL_REDIRECT
+# оставляем 0: иначе он редиректит и запросы по IP, а сборка, которая ходит на IP,
+# получила бы https://<ip> с сертификатом на домен.
+sed -i 's/^SECURE_SSL_REDIRECT=.*/SECURE_SSL_REDIRECT=0/' .env
 sed -i 's/^COOKIE_SECURE=.*/COOKIE_SECURE=1/' .env
 grep -E '^(SECURE_SSL_REDIRECT|COOKIE_SECURE)=' .env
 

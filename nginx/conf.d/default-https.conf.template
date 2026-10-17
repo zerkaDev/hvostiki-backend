@@ -29,6 +29,23 @@ server {
     }
 }
 
+# Временная совместимость: сборка, которая ходит на IP по HTTP, продолжает работать.
+# После перехода приложения на домен этот server-блок можно удалить.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name 45.150.36.205;
+
+    client_max_body_size 16m;
+    access_log /var/log/nginx/access.log main_ext;
+    error_log /var/log/nginx/error.log warn;
+
+    location / {
+        proxy_pass http://hvostiki_web;
+        include /etc/nginx/conf.d/proxy_params.conf;
+    }
+}
+
 # HTTPS: основной трафик.
 server {
     listen 443 ssl;
