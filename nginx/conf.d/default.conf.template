@@ -16,7 +16,10 @@ upstream hvostiki_web {
 limit_req_zone $binary_remote_addr zone=auth_code:10m rate=10r/m;
 
 server {
+    # Обе семьи адресов: AAAA-запись полезна для клиентов с IPv6, а IPv4 остаётся
+    # обязательным (uCaller и часть мобильных сетей работают только по IPv4).
     listen 80;
+    listen [::]:80;
     server_name ${SERVER_NAME};
 
     # Скриншот (10 МБ) + журнал (2 МБ) + запас на multipart.
@@ -28,6 +31,7 @@ server {
 
     # --- HTTPS (раскомментировать после выпуска сертификата) ---
     # listen 443 ssl;
+    # listen [::]:443 ssl;
     # http2 on;
     # ssl_certificate     /etc/letsencrypt/live/${SERVER_NAME}/fullchain.pem;
     # ssl_certificate_key /etc/letsencrypt/live/${SERVER_NAME}/privkey.pem;

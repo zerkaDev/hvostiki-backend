@@ -22,7 +22,9 @@ services:
       - ./certbot/www:/var/www/certbot
     ports:
       - "80:80"
+      - "[::]:80:80"
       - "443:443"
+      - "[::]:443:443"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
       interval: 30s
