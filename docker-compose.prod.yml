@@ -183,6 +183,15 @@ services:
       start_period: 30s
     restart: always
 
+  # Certbot не стартует вместе со стеком: запускается вручную для выпуска/продления.
+  #   docker compose -f docker-compose.prod.yml --profile tools run --rm certbot certonly ...
+  certbot:
+    image: certbot/certbot:latest
+    profiles: ["tools"]
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+
 volumes:
   pgdata:
   media:

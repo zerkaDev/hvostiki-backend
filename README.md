@@ -99,8 +99,9 @@ nginx слушает обе семьи адресов (`listen 80` + `listen [::
 
 ```
 mkdir -p certbot/conf certbot/www
-docker compose -f docker-compose.prod.yml run --rm --entrypoint certbot certbot certonly \
-  --webroot -w /var/www/certbot -d api.example.com --email you@example.com --agree-tos --no-eff-email
+docker compose -f docker-compose.prod.yml --profile tools run --rm certbot certonly \
+  --webroot -w /var/www/certbot -d example.com -d www.example.com \
+  --email you@example.com --agree-tos --no-eff-email
 ```
 
 Далее раскомментировать блок `# --- HTTPS ---` в шаблоне (там `SERVER_NAME` подставится в пути
@@ -112,7 +113,7 @@ docker compose -f docker-compose.prod.yml restart nginx
 
 Продление — по крону сервера (сертификат живёт 90 дней):
 ```
-docker compose -f docker-compose.prod.yml run --rm --entrypoint certbot certbot renew --webroot -w /var/www/certbot
+docker compose -f docker-compose.prod.yml --profile tools run --rm certbot renew --webroot -w /var/www/certbot
 docker compose -f docker-compose.prod.yml restart nginx
 ```
 
