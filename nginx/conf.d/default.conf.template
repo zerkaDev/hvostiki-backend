@@ -25,6 +25,17 @@ server {
     # Скриншот (10 МБ) + журнал (2 МБ) + запас на multipart.
     client_max_body_size 16m;
 
+    # Сжатие: /period/ отдаёт сотни килобайт JSON, без gzip это главный вклад
+    # в «медленно грузит» на мобильной сети. Django жмёт только если клиент
+    # прислал Accept-Encoding, поэтому включаем и на nginx.
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_vary on;
+    gzip_types application/json application/javascript text/css text/plain
+               text/xml application/xml image/svg+xml;
+
     # Логи: свой формат с реальным IP клиента (за прокси) и временем обработки.
     access_log /var/log/nginx/access.log combined;
     error_log /var/log/nginx/error.log warn;
