@@ -51,6 +51,8 @@ Backend приложения для учёта питомцев («Хвости�
   nginx и внешний мониторинг. При добавлении проверок зависимостей не переносить их в этот эндпоинт.
 - **Прод-настройки безопасности включаются при `DEBUG=0`** (`SECURE_SSL_REDIRECT`, secure-cookies, HSTS,
   `SECURE_PROXY_SSL_HEADER` для `X-Forwarded-Proto` от nginx). `CSRF_TRUSTED_ORIGINS` — из env.
+  Secure-флаги cookie управляются `COOKIE_SECURE`: `1` — когда сайт на HTTPS, `0` — пока прод работает
+  по HTTP (иначе браузер не вернёт `csrftoken`/`sessionid` и админка отдаёт 403 CSRF).
   Адреса БД, кеша и брокера берутся из env (`POSTGRES_HOST`, `CACHE_URL`, `CELERY_BROKER_URL`),
   в dev-стеке остаются прежние значения по умолчанию.
 - **nginx** раздаёт `/static/` и `/media/` из томов, проксирует остальное, ограничивает частоту

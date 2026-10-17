@@ -287,8 +287,12 @@ SERVE_MEDIA = DEBUG or os.getenv('SERVE_MEDIA') == '1'
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', '1') == '1'
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
+    # Secure-cookie включаем только когда сайт реально на HTTPS. Пока прод работает по
+    # HTTP (нет домена), браузер не вернёт Secure-cookie, и админка/формы падают с
+    # 403 CSRF. После подключения TLS верните COOKIE_SECURE=1.
+    COOKIE_SECURE = os.getenv('COOKIE_SECURE', '1') == '1'
+    SESSION_COOKIE_SECURE = COOKIE_SECURE
+    CSRF_COOKIE_SECURE = COOKIE_SECURE
     SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', 60 * 60 * 24 * 30))
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = os.getenv('SECURE_HSTS_PRELOAD', '0') == '1'

@@ -36,8 +36,8 @@ server {
     gzip_types application/json application/javascript text/css text/plain
                text/xml application/xml image/svg+xml;
 
-    # Логи: свой формат с реальным IP клиента (за прокси) и временем обработки.
-    access_log /var/log/nginx/access.log combined;
+    # Логи: формат main_ext (см. log_format.conf) — с rt/urt/gz для поиска тормозов.
+    access_log /var/log/nginx/access.log main_ext;
     error_log /var/log/nginx/error.log warn;
 
     # --- HTTPS (раскомментировать после выпуска сертификата) ---

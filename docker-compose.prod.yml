@@ -16,6 +16,7 @@ services:
     volumes:
       - ./nginx/conf.d/default.conf.template:/etc/nginx/templates/default.conf.template:ro
       - ./nginx/conf.d/proxy_params.conf:/etc/nginx/conf.d/proxy_params.conf:ro
+      - ./nginx/conf.d/0-log_format.conf:/etc/nginx/conf.d/0-log_format.conf:ro
       - staticfiles:/app/staticfiles:ro
       - media:/app/media:ro
       - ./certbot/conf:/etc/letsencrypt:ro
