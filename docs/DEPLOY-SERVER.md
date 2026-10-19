@@ -51,7 +51,12 @@ docker compose -f docker-compose.prod.yml -f docker-compose.server.yml down
 - **swap 2 ГБ** (`/swapfile`, в `/etc/fstab`) — на 956 МБ RAM без него не собрать и не пережить деплой;
 - **Docker** с лимитом логов (10 МБ × 2 на контейнер) и `live-restore`, автозапуск включён;
 - **ufw**: открыты только 22, 80, 443;
-- **SSH**: только по ключу (`PasswordAuthentication no`). В `/root/.ssh/authorized_keys`:
+- **SSH**: только по ключу (`PasswordAuthentication no`). **Важная грабля:** sshd берёт *первое*
+  встреченное значение параметра, а `Include /etc/ssh/sshd_config.d/*.conf` стоит в начале
+  `sshd_config`. Ubuntu кладёт `50-cloud-init.conf` с `PasswordAuthentication yes`, который
+  перекрывал наш `99-hvostiki.conf` — пароль оставался включённым. Поэтому наш файл называется
+  `00-hvostiki.conf` (читается первым) и в `50-cloud-init.conf` тоже стоит `no`.
+  Проверка, что реально применилось: `sshd -T | grep -i passwordauthentication`. В `/root/.ssh/authorized_keys`:
   деплойный `dsh-deploy-hvostiki` (им пользуется агент через `secrets/deploy_key`), личный ключ
   владельца `goat@MacBook-Pro-lil.local` и ключ разработчика `mokshinr@MacBook-Pro-Roman.local`.
   Вход владельца работает как `ssh root@45.150.36.205` (ключ по умолчанию).
