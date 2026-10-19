@@ -51,7 +51,11 @@ docker compose -f docker-compose.prod.yml -f docker-compose.server.yml down
 - **swap 2 ГБ** (`/swapfile`, в `/etc/fstab`) — на 956 МБ RAM без него не собрать и не пережить деплой;
 - **Docker** с лимитом логов (10 МБ × 2 на контейнер) и `live-restore`, автозапуск включён;
 - **ufw**: открыты только 22, 80, 443;
-- **SSH**: только по ключу (`PasswordAuthentication no`), пароль root в истории чата — считать скомпрометированным;
+- **SSH**: только по ключу (`PasswordAuthentication no`). В `/root/.ssh/authorized_keys` два ключа:
+  деплойный `dsh-deploy-hvostiki` (им пользуется агент через `secrets/deploy_key`) и личный ключ
+  владельца `goat@MacBook-Pro-lil.local` — поэтому вход работает просто как `ssh root@45.150.36.205`.
+  Доступ коллеге добавляется той же командой (публичный ключ в конец файла, права `600`/`700`),
+  отзыв — удалением строки, перезапуск SSH не нужен;
 - **бэкап**: `/opt/hvostiki/backup/backup.sh` по cron в 04:00, дамп БД + медиа, хранит 7 дней.
   Проверка: `zcat /opt/hvostiki/backup/db-*.sql.gz | grep -c "CREATE TABLE"` (должно быть > 0);
 - **Firebase**: `secrets/firebase-key.json` смонтирован в `web` и `celery` только на чтение,
