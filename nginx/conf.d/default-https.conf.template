@@ -40,6 +40,19 @@ server {
     access_log /var/log/nginx/access.log main_ext;
     error_log /var/log/nginx/error.log warn;
 
+    # Страница поддержки — Support URL из App Store Connect.
+    location = /support {
+        return 301 /support/;
+    }
+
+    location /support/ {
+        root /app;
+        index index.html;
+        access_log off;
+        expires 1h;
+        add_header Cache-Control "public";
+    }
+
     # Юридические документы доступны и по IP: сборка, которая ещё ходит на IP,
     # может собрать ссылку от своего base URL.
     location /legal/ {

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Поддержка — Хвостики</title>
+<meta name="description" content="Поддержка приложения «Хвостики»: как связаться, где оставить обратную связь и как удалить аккаунт.">
+<style>
+  :root {
+    --text: #1d2430;
+    --muted: #5b6472;
+    --accent: #2f7d5d;
+    --line: #e3e7ed;
+    --bg: #f6f7f9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 20px 64px;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  main {
+    max-width: 720px;
+    margin: 0 auto;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 32px;
+  }
+  h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.25; }
+  .lead { margin: 0 0 28px; color: var(--muted); }
+  h2 { margin: 32px 0 8px; font-size: 19px; }
+  p, li { margin: 8px 0; }
+  ul { padding-left: 22px; }
+  a { color: var(--accent); }
+  .email {
+    display: inline-block;
+    font-size: 20px;
+    font-weight: 600;
+    word-break: break-all;
+  }
+  .steps { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px 18px; }
+  .steps ol { margin: 6px 0; padding-left: 22px; }
+  .note { margin-top: 10px; color: var(--muted); font-size: 14px; }
+  footer {
+    margin-top: 36px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 14px;
+  }
+  footer a { margin-right: 14px; }
+  @media (max-width: 560px) { main { padding: 22px; } h1 { font-size: 24px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Хвостики</h1>
+  <p class="lead">Приложение для учёта питомцев: напоминания о прививках, обработке от паразитов,
+    кормлении, прогулках и визитах к ветеринару.</p>
+
+  <h2>Написать в поддержку</h2>
+  <p>Почта: <a class="email" href="mailto:hvostiki.support.dev@gmail.com">hvostiki.support.dev@gmail.com</a></p>
+  <p>Отвечаем в рабочие дни. В письме опишите проблему и, если возможно, приложите скриншот —
+    так разберёмся быстрее.</p>
+
+  <h2>Обратная связь из приложения</h2>
+  <p>Можно отправить сообщение прямо из приложения — оно попадёт в поддержку вместе с версией
+    приложения и моделью устройства:</p>
+  <div class="steps">
+    <ol>
+      <li>Откройте «Профиль».</li>
+      <li>Выберите «Помощь и обратная связь».</li>
+      <li>Опишите проблему, при необходимости приложите скриншот и отправьте.</li>
+    </ol>
+  </div>
+
+  <h2>Удаление аккаунта</h2>
+  <p>Удалить аккаунт и все связанные данные можно самостоятельно в приложении:</p>
+  <div class="steps">
+    <ol>
+      <li>Откройте «Профиль».</li>
+      <li>Выберите «Редактировать профиль».</li>
+      <li>Нажмите «Удалить аккаунт» и подтвердите кодом из звонка.</li>
+    </ol>
+  </div>
+  <p class="note">Удаление необратимо: вместе с аккаунтом удаляются питомцы, события, история
+    уведомлений и загруженные фотографии. Если войти не получается, напишите на почту поддержки
+    с того номера, на который зарегистрирован аккаунт.</p>
+
+  <h2>Документы</h2>
+  <p>
+    <a href="/legal/privacy-policy.pdf">Политика обработки персональных данных</a><br>
+    <a href="/legal/terms-of-use.pdf">Пользовательское соглашение</a><br>
+    <a href="/legal/personal-data-consent.pdf">Согласие на обработку персональных данных</a>
+  </p>
+
+  <footer>
+    <a href="mailto:hvostiki.support.dev@gmail.com">Почта поддержки</a>
+    <a href="/legal/privacy-policy.pdf">Конфиденциальность</a>
+    <span>© Хвостики</span>
+  </footer>
+</main>
+</body>
+</html>
