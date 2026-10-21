@@ -19,6 +19,8 @@ services:
       - ./nginx/conf.d/0-log_format.conf:/etc/nginx/conf.d/0-log_format.conf:ro
       - staticfiles:/app/staticfiles:ro
       - media:/app/media:ro
+      # Юридические документы (PDF) отдаются как /legal/<имя>.pdf
+      - ./legal:/app/legal:ro
       - ./certbot/conf:/etc/letsencrypt:ro
       - ./certbot/www:/var/www/certbot
     # Явно по семьям адресов: короткая запись "80:80" в Docker биндится сразу на IPv4 и IPv6,

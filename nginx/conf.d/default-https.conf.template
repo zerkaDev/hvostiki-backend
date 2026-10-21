@@ -103,6 +103,14 @@ server {
         add_header Cache-Control "public";
     }
 
+    # Юридические документы: публичные PDF без авторизации.
+    location /legal/ {
+        root /app;
+        access_log off;
+        expires 1h;
+        add_header Cache-Control "public";
+    }
+
     # Медиа пользователей: аватары, фото питомцев, скриншоты обращений.
     # Журналы приложения здесь не лежат — они в приватном хранилище (private_media).
     location /media/ {
