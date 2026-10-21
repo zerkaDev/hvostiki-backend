@@ -20,6 +20,19 @@ DEBUG = os.getenv('DEBUG') == '1'
 # Работает только при DEBUG=1 и никогда не задаётся в проде.
 DEBUG_CONFIRMATION_CODE = os.getenv('DEBUG_CONFIRMATION_CODE', '')
 
+# Режим проверки приложения магазином (App Store / Google Play).
+# Пока включён: /auth/send-code/ не звонит через uCaller, а /auth/verify-code/
+# принимает REVIEW_LOGIN_CODE. Нужен, чтобы ревьюер мог войти без реального звонка.
+# Включать только на время ревью. Если REVIEW_LOGIN_PHONES пуст — режим действует
+# для любого номера (ревьюер вводит любой); иначе только для перечисленных.
+REVIEW_LOGIN_ENABLED = os.getenv('REVIEW_LOGIN_ENABLED', '0') == '1'
+REVIEW_LOGIN_CODE = os.getenv('REVIEW_LOGIN_CODE', '')
+REVIEW_LOGIN_PHONES = {
+    phone.strip()
+    for phone in os.getenv('REVIEW_LOGIN_PHONES', '').split(',')
+    if phone.strip()
+}
+
 ALLOWED_HOSTS = os.getenv('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 # Application definition

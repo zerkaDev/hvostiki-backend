@@ -132,6 +132,19 @@ tracker/
   новую запись и снова даёт `true` (с новым `user_id`).
 - Старые версии приложения новые поля игнорируют, миграции не требуются.
 
+## Режим проверки магазином (`review_access`)
+
+- Временный вход для ревьюеров App Store / Google Play без звонка uCaller. Управляется
+  переменными окружения (`REVIEW_LOGIN_ENABLED`, `REVIEW_LOGIN_CODE`, `REVIEW_LOGIN_PHONES`),
+  по умолчанию выключен; код в репозитории не хранится.
+- Пока включён: `POST /auth/send-code/` не вызывает `send_confirmation_code` (звонок не
+  тратится), а `POST /auth/verify-code/` принимает `REVIEW_LOGIN_CODE` для любого номера
+  (или только для `REVIEW_LOGIN_PHONES`, если список задан) и создаёт пользователя при
+  необходимости. Обычный код при этом тоже принимается, если он был отправлен.
+- Каждое использование пишется в лог с `WARNING` («Review-вход использован»), чтобы
+  забытый включённым режим был заметен. После ревью — `REVIEW_LOGIN_ENABLED=0` и рестарт `web`.
+- Логика — в `tracker/review_access.py`; тесты — `tests/test_auth.py::TestReviewLogin`.
+
 ## Раздел «Профиль» (контракт)
 
 - `GET /profile/` → `id, phone_number, name, avatar (абсолютный URL | null), notification_settings, is_verified, created_at`.

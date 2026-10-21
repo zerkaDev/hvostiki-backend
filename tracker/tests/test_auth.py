@@ -297,3 +297,83 @@ class TestAdminPhoneLogin:
 
     def test_unknown_phone_rejected(self):
         assert authenticate(username='+79000000000', password='admin-pass-123') is None
+
+
+@pytest.mark.django_db
+class TestReviewLogin:
+    """Режим проверки магазином: вход по фиксированному коду без звонка uCaller."""
+
+    @pytest.fixture(autouse=True)
+    def review_mode(self, settings):
+        settings.REVIEW_LOGIN_ENABLED = True
+        settings.REVIEW_LOGIN_CODE = '0011'
+        settings.REVIEW_LOGIN_PHONES = set()
+        return settings
+
+    def test_send_code_does_not_call_ucaller(self, api_client):
+        with patch('tracker.tasks.send_confirmation_code.delay') as send:
+            response = api_client.post(reverse('send_code'), {'phone_number': '79001112233'})
+
+        assert response.status_code == 200
+        send.assert_not_called()
+
+    def test_verify_by_review_code(self, api_client):
+        api_client.post(reverse('send_code'), {'phone_number': '79001112233'})
+
+        response = api_client.post(
+            reverse('verify_code'), {'phone_number': '79001112233', 'code': '0011'},
+        )
+
+        assert response.status_code == 200
+        assert 'access' in response.data and 'refresh' in response.data
+        assert User.objects.get(phone_number='79001112233').is_verified is True
+
+    def test_verify_works_without_prior_send_code(self, api_client):
+        response = api_client.post(
+            reverse('verify_code'), {'phone_number': '79005550011', 'code': '0011'},
+        )
+
+        assert response.status_code == 200
+        assert User.objects.filter(phone_number='79005550011').exists()
+
+    def test_other_code_still_rejected(self, api_client):
+        api_client.post(reverse('send_code'), {'phone_number': '79001112233'})
+
+        response = api_client.post(
+            reverse('verify_code'), {'phone_number': '79001112233', 'code': '0022'},
+        )
+
+        assert response.status_code == 400
+
+    def test_allowlist_limits_review_mode(self, api_client, settings):
+        settings.REVIEW_LOGIN_PHONES = {'79001112233'}
+
+        with patch('tracker.tasks.send_confirmation_code.delay') as send:
+            allowed = api_client.post(reverse('send_code'), {'phone_number': '79001112233'})
+            other = api_client.post(reverse('send_code'), {'phone_number': '79005550022'})
+
+        assert allowed.status_code == 200 and other.status_code == 200
+        assert send.call_count == 1  # звонок только для номера вне списка
+        response = api_client.post(
+            reverse('verify_code'), {'phone_number': '79005550022', 'code': '0011'},
+        )
+        assert response.status_code == 400
+
+    def test_disabled_mode_rejects_review_code(self, api_client, settings):
+        settings.REVIEW_LOGIN_ENABLED = False
+        api_client.post(reverse('send_code'), {'phone_number': '79001112233'})
+
+        response = api_client.post(
+            reverse('verify_code'), {'phone_number': '79001112233', 'code': '0011'},
+        )
+
+        assert response.status_code == 400
+
+    def test_empty_code_disables_mode(self, api_client, settings):
+        settings.REVIEW_LOGIN_CODE = ''
+
+        response = api_client.post(
+            reverse('verify_code'), {'phone_number': '79005550033', 'code': '0011'},
+        )
+
+        assert response.status_code == 400

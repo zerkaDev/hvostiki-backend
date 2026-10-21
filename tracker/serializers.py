@@ -15,6 +15,7 @@ from tracker.models import DevicePlatform, Feedback, Notification, NotificationS
 from .occurrence_edit import prune_state
 from .occurrence_state import slot_filter
 
+from . import review_access
 from .event_time import time_to_stored, time_to_wire
 from .reminders import ReminderError, validate_reminders
 from .notification_categories import CATEGORIES
@@ -52,6 +53,14 @@ class VerifyCodeSerializer(serializers.Serializer):
     def validate(self, data):
         phone_number = normalize_phone(data['phone_number'])
         code = data['code']
+
+        # Режим ревью магазина: код из REVIEW_LOGIN_CODE принимается без звонка.
+        # Работает только когда режим включён явно (по умолчанию выключен).
+        if review_access.phone_allowed(phone_number) and review_access.code_matches(code):
+            user, _ = User.objects.get_or_create(phone_number=phone_number)
+            review_access.log_use(phone_number)
+            data['user'] = user
+            return data
 
         try:
             user = User.objects.get(phone_number=phone_number)

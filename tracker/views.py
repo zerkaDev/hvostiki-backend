@@ -36,6 +36,7 @@ from tracker.serializers import (
     DeviceRegistrationSerializer, DeviceUnregistrationSerializer, DeleteAccountSerializer, FeedbackSerializer,
     NotificationSettingsSerializer, NotificationSerializer
 )
+from tracker import review_access
 from tracker.tasks import send_confirmation_code, deliver_feedback
 from tracker.services import account_deletion
 from tracker.recurrence import event_slots, parse_stored_times
@@ -224,7 +225,11 @@ class SendCodeView(APIView):
         user.code_attempts = 0
         user.save(update_fields=['confirmation_code', 'code_sent_at', 'code_attempts'])
 
-        if not settings.DEBUG:
+        if review_access.phone_allowed(phone_number):
+            # Режим ревью: звонок не нужен и тратит деньги — вход пройдёт по REVIEW_LOGIN_CODE.
+            review_access.log_use(phone_number, request.META.get('REMOTE_ADDR'))
+            logger.info('Режим ревью: звонок uCaller пропущен для %s', phone_number)
+        elif not settings.DEBUG:
             send_confirmation_code.delay(phone_number, code)
 
         logger.info('Код подтверждения отправлен на номер %s', phone_number)
