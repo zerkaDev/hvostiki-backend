@@ -40,6 +40,15 @@ server {
     access_log /var/log/nginx/access.log main_ext;
     error_log /var/log/nginx/error.log warn;
 
+    # Юридические документы доступны и по IP: сборка, которая ещё ходит на IP,
+    # может собрать ссылку от своего base URL.
+    location /legal/ {
+        root /app;
+        access_log off;
+        expires 1h;
+        add_header Cache-Control "public";
+    }
+
     location / {
         proxy_pass http://hvostiki_web;
         include /etc/nginx/conf.d/proxy_params.conf;
