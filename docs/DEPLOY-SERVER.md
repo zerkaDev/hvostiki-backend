@@ -68,6 +68,13 @@ docker compose -f docker-compose.prod.yml -f docker-compose.server.yml down
 - **Firebase**: `secrets/firebase-key.json` смонтирован в `web` и `celery` только на чтение,
   права `10001:10001` — иначе процесс под `app` не может его прочитать.
 
+## Режим ревью магазина
+
+На время App Store Review включён вход без звонка uCaller: только номер **78888888888**
+и код **0011** (`.env`: `REVIEW_LOGIN_ENABLED=1`, `REVIEW_LOGIN_CODE=0011`,
+`REVIEW_LOGIN_PHONES=78888888888`). Остальные номера проходят обычный путь с реальным
+звонком. После аппрува выключить: `REVIEW_LOGIN_ENABLED=0` и рестарт `web` (пересборка не нужна).
+
 ## Тонкости, на которых уже спотыкались
 
 - `celery` и `celery-beat` наследуют `HEALTHCHECK` образа (порт 8000), которого у них нет,
